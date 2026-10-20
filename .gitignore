@@ -25,5 +25,6 @@ Desktop.ini
 
 # 界面预览工具的本地构建产物与截图
 /tools/*.exe
+/tools/*.exe.manifest
 /tools/*.obj
 /tools/shots/

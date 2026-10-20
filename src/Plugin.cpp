@@ -1,10 +1,9 @@
 #include "PluginInterface.h"
 #include "UsageApi.h"
 #include "resource.h"
-#include "UiControls.h"
-#include "UiTheme.h"
 
 #include <windows.h>
+#include <commctrl.h>
 #include <wincrypt.h>
 #include <winhttp.h>
 
@@ -30,6 +29,7 @@
 #include <vector>
 
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "comctl32.lib")
 #if defined(_MSC_VER) && defined(_M_IX86)
 #pragma comment(linker, "/EXPORT:TMPluginGetInstance=_TMPluginGetInstance")
 #endif
@@ -254,7 +254,7 @@ public:
         case TMI_DESCRIPTION: return L"AIAPI（AIAPI 站点）、New API、Sub2API 专用适配器及自定义接口";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"2.5.0";
+        case TMI_VERSION: return L"2.6.0";
         case TMI_URL: return L"{AIAPI 站点}";
         default: return L"";
         }
@@ -374,6 +374,8 @@ private:
         int selectedIndex;
         bool changed;
         int refreshSeconds;
+        // 代码里刷新列表时会触发 LVN_ITEMCHANGED，用它跳过这次通知。
+        bool updatingList = false;
     };
 
     struct CustomDialogContext {
@@ -392,6 +394,13 @@ private:
         sites.clear();
     }
 
+    // 空编辑框的提示文字（Windows 原生 cue banner）。
+    static void SetEditCue(HWND window, int controlId, const wchar_t* text) {
+        if (HWND edit = GetDlgItem(window, controlId)) {
+            SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(text));
+        }
+    }
+
     static bool ReadText(HWND window, int controlId, size_t limit, std::wstring& value) {
         std::vector<wchar_t> buffer(limit + 1, L'\0');
         const int count = GetDlgItemTextW(window, controlId, buffer.data(), static_cast<int>(buffer.size()));
@@ -402,6 +411,19 @@ private:
         value.assign(buffer.data(), static_cast<size_t>(count));
         SecureZeroMemory(buffer.data(), buffer.size() * sizeof(wchar_t));
         return true;
+    }
+
+    // 编辑框只把 CRLF 当换行：默认脚本在源码里是 LF，旧配置也可能只有 LF。
+    static std::wstring WithWindowsLineEndings(const std::wstring& text) {
+        if (text.find(L'\n') == std::wstring::npos) return text;
+        std::wstring result;
+        result.reserve(text.size() + 16);
+        for (size_t i = 0; i < text.size(); ++i) {
+            const wchar_t ch = text[i];
+            if (ch == L'\n' && (i == 0 || text[i - 1] != L'\r')) result += L"\r\n";
+            else result += ch;
+        }
+        return result;
     }
 
     // 刷新间隔候选（秒）。界面按索引与这些值一一对应。
@@ -456,12 +478,95 @@ private:
         return aiapi::SiteAdapter::Custom;
     }
 
+    // 对话框居中：优先对齐可见的父窗口，否则退回屏幕工作区（宿主主窗口可能隐藏）。
+    static void CenterDialog(HWND window) {
+        RECT dialog{};
+        if (!GetWindowRect(window, &dialog)) return;
+        RECT anchor{};
+        const HWND owner = GetParent(window);
+        const bool useOwner = owner && IsWindowVisible(owner) && !IsIconic(owner) &&
+            GetWindowRect(owner, &anchor) && MonitorFromRect(&anchor, MONITOR_DEFAULTTONULL) != nullptr;
+        if (!useOwner) {
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, &anchor, 0);
+        }
+        const int width = dialog.right - dialog.left;
+        const int height = dialog.bottom - dialog.top;
+        SetWindowPos(window, nullptr,
+            anchor.left + ((anchor.right - anchor.left) - width) / 2,
+            anchor.top + ((anchor.bottom - anchor.top) - height) / 2,
+            0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    static void SetDetailEnabled(HWND window, bool enabled) {
+        for (int id : { IDC_SITE_ENABLED, IDC_SITE_TYPE, IDC_CUSTOM_CONFIG, IDC_SITE_NAME,
+                        IDC_SITE_BASE_URL, IDC_SITE_BASE_URL_LABEL, IDC_SITE_CREDENTIAL,
+                        IDC_SITE_CREDENTIAL_LABEL, IDC_SITE_USER_ID, IDC_SITE_USER_ID_LABEL }) {
+            EnableWindow(GetDlgItem(window, id), enabled ? TRUE : FALSE);
+        }
+    }
+
+    static void InsertListViewColumn(HWND list, int index, const wchar_t* text, int width) {
+        LVCOLUMNW column{};
+        column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        column.pszText = const_cast<wchar_t*>(text);
+        column.cx = width;
+        column.iSubItem = index;
+        SendMessageW(list, LVM_INSERTCOLUMNW, static_cast<WPARAM>(index),
+            reinterpret_cast<LPARAM>(&column));
+    }
+
+    static void SetListViewSubItem(HWND list, int row, int column, const wchar_t* text) {
+        LVITEMW item{};
+        item.iItem = row;
+        item.iSubItem = column;
+        item.mask = LVIF_TEXT;
+        item.pszText = const_cast<wchar_t*>(text);
+        SendMessageW(list, LVM_SETITEMW, 0, reinterpret_cast<LPARAM>(&item));
+    }
+
+    // 与宿主“插件管理”一致：ListView 报表模式显示 名称 / 类型 / 状态。
+    static void InitSiteListView(HWND window) {
+        HWND list = GetDlgItem(window, IDC_SITE_LIST);
+        if (!list) return;
+        const LPARAM extended = LVS_EX_FULLROWSELECT | LVS_EX_LABELTIP | LVS_EX_DOUBLEBUFFER;
+        SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, static_cast<WPARAM>(extended), extended);
+        RECT client{};
+        GetClientRect(list, &client);
+        const int total = client.right - client.left;
+        const int nameWidth = total * 50 / 100;
+        const int typeWidth = total * 28 / 100;
+        const int statusWidth = std::max(28, total - nameWidth - typeWidth - 8);
+        InsertListViewColumn(list, 0, L"名称", nameWidth);
+        InsertListViewColumn(list, 1, L"类型", typeWidth);
+        InsertListViewColumn(list, 2, L"状态", statusWidth);
+    }
+
+    static void SelectListViewRow(HWND list, int index) {
+        if (index < 0) return;
+        LVITEMW item{};
+        item.mask = LVIF_STATE;
+        item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+        item.state = LVIS_SELECTED | LVIS_FOCUSED;
+        item.iItem = index;
+        SendMessageW(list, LVM_SETITEMSTATE, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&item));
+        SendMessageW(list, LVM_ENSUREVISIBLE, static_cast<WPARAM>(index), FALSE);
+    }
+
+    static const wchar_t* AdapterDisplayName(aiapi::SiteAdapter adapter) {
+        switch (adapter) {
+        case aiapi::SiteAdapter::AIAPI: return L"AIAPI";
+        case aiapi::SiteAdapter::NewAPI: return L"New API";
+        case aiapi::SiteAdapter::Sub2API: return L"Sub2API";
+        case aiapi::SiteAdapter::Custom: return L"自定义接口";
+        }
+        return L"";
+    }
+
     static void UpdateAdapterFields(HWND window, aiapi::SiteAdapter adapter,
         bool hasCredential, bool hasCustomScript) {
         const bool newApi = adapter == aiapi::SiteAdapter::NewAPI;
         const bool custom = adapter == aiapi::SiteAdapter::Custom;
         EnableWindow(GetDlgItem(window, IDC_SITE_BASE_URL), adapter == aiapi::SiteAdapter::AIAPI ? FALSE : TRUE);
-        EnableWindow(GetDlgItem(window, IDC_SITE_CREDENTIAL), TRUE);
         EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID), newApi ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID_LABEL), newApi ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_CUSTOM_CONFIG), custom ? TRUE : FALSE);
@@ -469,76 +574,106 @@ private:
         switch (adapter) {
         case aiapi::SiteAdapter::AIAPI:
             SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"{AIAPI 站点}");
-            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"AIAPI 专用站点地址（固定）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"API Key / Session Token");
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"站点地址（固定）");
+            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
+                hasCredential ? L"API Key / 站点会话（已保存）" : L"API Key / 站点会话");
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"专用适配站点：AIAPI（AIAPI 站点）。API Key 查询账户余额；若 Key 接口不含钱包字段，会回退为 Key 可用额。"
-                : L"这是 AIAPI（AIAPI 站点）专用配置。填写该站点 API Key；需要官网账户钱包时可填本机新签发的会话凭据。");
+                ? L"已保存 AIAPI 凭据。后台按 /v1/usage 查询剩余额度，自动识别钱包余额、套餐或限额类别。"
+                : L"填写 AIAPI API Key（或本机签发的站点会话凭据）后，插件才会开始查询余额。");
             break;
         case aiapi::SiteAdapter::NewAPI:
             SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"New API Base URL");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"System Access Token");
+            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
+                hasCredential ? L"System Access Token（已保存）" : L"System Access Token");
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"已保存 System Access Token。需有数字 User ID；账户额度按 CC-Switch 模板比例 500000 换算。"
-                : L"填写 New API Base URL、System Access Token 和数字 User ID。按用户账户 quota 查询。");
+                ? L"已保存 System Access Token。User ID 必须是数字；额度按 CC-Switch 模板的 500000 单位换算。"
+                : L"填写 New API Base URL、System Access Token 和数字 User ID，按用户账户 quota 查询。");
             break;
         case aiapi::SiteAdapter::Sub2API:
-            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"Sub2API 站点根 URL（可带或不带 /v1）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"Sub2API API Key（Bearer）");
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"站点根 URL（可带 /v1）");
+            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
+                hasCredential ? L"API Key（Bearer，已保存）" : L"API Key（Bearer）");
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"已保存 API Key。请求为 GET <Base URL>/v1/usage；留空密码框表示保留已保存的 Key。"
-                : L"必填两项：Sub2API 站点根 URL 和 API Key。Base URL 可带或不带 /v1；无需填写 User ID。");
+                ? L"已保存 Sub2API API Key。请求为 GET <Base URL>/v1/usage；凭据留空表示保留已保存的值。"
+                : L"填写 Sub2API 站点根 URL 和 API Key；Base URL 可带或不带 /v1，无需 User ID。");
             break;
         case aiapi::SiteAdapter::Custom:
-            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"自定义 Base URL（相对 URL 的前缀）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"API Key（由脚本占位符使用，可选）");
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"自定义 Base URL（相对 URL 前缀）");
+            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"API Key（脚本占位符，可选）");
             SetDlgItemTextW(window, IDC_STATUS, hasCustomScript
-                ? L"自定义 request/extractor 已配置。HTTPS 请求仅在启用查询后执行。"
-                : L"选择“自定义接口”后，点右侧“自定义配置...”填写 request 和 extractor。");
+                ? L"已配置自定义 request / extractor。点击“自定义配置…”可以继续修改。"
+                : L"选择“自定义接口”后，点击右侧“自定义配置…”编写 request 和 extractor。");
             break;
         }
     }
 
     static void LoadSelectedSite(HWND window, DialogContext* context) {
-        if (context->selectedIndex < 0 || context->selectedIndex >= static_cast<int>(context->sites.size())) return;
-        const auto& site = context->sites[static_cast<size_t>(context->selectedIndex)];
-        SetDlgItemTextW(window, IDC_SITE_NAME, site.name.c_str());
-        SetDlgItemTextW(window, IDC_SITE_BASE_URL, site.baseUrl.c_str());
-        SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
-        SetDlgItemTextW(window, IDC_SITE_USER_ID, site.userId.c_str());
-        SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, AdapterComboIndex(site.adapter), 0);
-        SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, site.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-        UpdateAdapterFields(window, site.adapter, !site.credential.empty(), !site.customScript.empty());
-        EnableWindow(GetDlgItem(window, IDC_SITE_REMOVE), TRUE);
-    }
-
-    static void UpdateSiteList(HWND window, DialogContext* context) {
-        SendDlgItemMessageW(window, IDC_SITE_LIST, LB_RESETCONTENT, 0, 0);
-        for (const auto& site : context->sites) {
-            // 状态前缀由自绘层解析成圆点，这里保持纯文本约定。
-            const std::wstring label = (site.enabled ? L"[启用] " : L"[停用] ") +
-                (site.name.empty() ? L"(未命名站点)" : site.name);
-            SendDlgItemMessageW(window, IDC_SITE_LIST, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-        }
-        if (context->sites.empty()) {
-            context->selectedIndex = -1;
+        if (context->selectedIndex < 0 || context->selectedIndex >= static_cast<int>(context->sites.size())) {
+            SetDetailEnabled(window, false);
             SetDlgItemTextW(window, IDC_SITE_NAME, L"");
             SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"");
             SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
             SetDlgItemTextW(window, IDC_SITE_USER_ID, L"");
             SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, BST_UNCHECKED, 0);
-            SetDlgItemTextW(window, IDC_STATUS, L"点击“新增”添加 AIAPI（AIAPI 站点）、New API、Sub2API 或自定义站点。所有配置保存在同一个加密文件中。");
-            EnableWindow(GetDlgItem(window, IDC_SITE_REMOVE), FALSE);
-            EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID), FALSE);
-            EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID_LABEL), FALSE);
-            EnableWindow(GetDlgItem(window, IDC_CUSTOM_CONFIG), FALSE);
+            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+            SetEditCue(window, IDC_SITE_NAME, L"例如：AIAPI 主账号");
+            SetEditCue(window, IDC_SITE_BASE_URL, L"https://");
+            SetEditCue(window, IDC_SITE_CREDENTIAL, L"粘贴 API Key / Token");
+            SetEditCue(window, IDC_SITE_USER_ID, L"数字 User ID");
             return;
         }
-        if (context->selectedIndex < 0 || context->selectedIndex >= static_cast<int>(context->sites.size())) {
+        const auto& site = context->sites[static_cast<size_t>(context->selectedIndex)];
+        SetDetailEnabled(window, true);
+        SetDlgItemTextW(window, IDC_SITE_NAME, site.name.c_str());
+        SetDlgItemTextW(window, IDC_SITE_BASE_URL, site.baseUrl.c_str());
+        SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
+        SetDlgItemTextW(window, IDC_SITE_USER_ID, site.userId.c_str());
+        SetEditCue(window, IDC_SITE_NAME, L"例如：AIAPI 主账号");
+        SetEditCue(window, IDC_SITE_BASE_URL, L"https://");
+        SetEditCue(window, IDC_SITE_CREDENTIAL,
+            site.credential.empty() ? L"粘贴 API Key / Token" : L"已保存，留空表示不修改");
+        SetEditCue(window, IDC_SITE_USER_ID, L"数字 User ID");
+        SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, AdapterComboIndex(site.adapter), 0);
+        SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, site.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        UpdateAdapterFields(window, site.adapter, !site.credential.empty(), !site.customScript.empty());
+    }
+
+    static void UpdateSiteList(HWND window, DialogContext* context) {
+        HWND list = GetDlgItem(window, IDC_SITE_LIST);
+        if (!list) return;
+        context->updatingList = true;
+        SendMessageW(list, LVM_DELETEALLITEMS, 0, 0);
+        for (size_t i = 0; i < context->sites.size(); ++i) {
+            const auto& site = context->sites[i];
+            const std::wstring name = site.name.empty() ? L"(未命名站点)" : site.name;
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = static_cast<int>(i);
+            item.pszText = const_cast<wchar_t*>(name.c_str());
+            const int row = static_cast<int>(
+                SendMessageW(list, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item)));
+            if (row < 0) continue;
+            SetListViewSubItem(list, row, 1, AdapterDisplayName(site.adapter));
+            SetListViewSubItem(list, row, 2, site.enabled ? L"启用" : L"停用");
+        }
+        if (context->sites.empty()) {
+            context->selectedIndex = -1;
+        } else if (context->selectedIndex < 0 ||
+                   context->selectedIndex >= static_cast<int>(context->sites.size())) {
             context->selectedIndex = 0;
         }
-        SendDlgItemMessageW(window, IDC_SITE_LIST, LB_SETCURSEL, static_cast<WPARAM>(context->selectedIndex), 0);
+        if (context->selectedIndex >= 0) SelectListViewRow(list, context->selectedIndex);
+        context->updatingList = false;
+        const std::wstring groupText = L"站点（" + std::to_wstring(context->sites.size()) + L"/" +
+            std::to_wstring(kMaxSites) + L"）";
+        SetDlgItemTextW(window, IDC_GROUP_SITES, groupText.c_str());
         LoadSelectedSite(window, context);
+        EnableWindow(GetDlgItem(window, IDC_SITE_ADD), context->sites.size() < kMaxSites ? TRUE : FALSE);
+        EnableWindow(GetDlgItem(window, IDC_SITE_REMOVE), context->selectedIndex >= 0 ? TRUE : FALSE);
+        if (context->sites.empty()) {
+            SetDlgItemTextW(window, IDC_STATUS,
+                L"尚未添加站点。点击“新增站点”添加 AIAPI、New API、Sub2API 或自定义接口。");
+        }
     }
 
     static bool StoreSelectedSite(HWND window, DialogContext* context) {
@@ -633,41 +768,51 @@ private:
     static INT_PTR CALLBACK CustomConfigDialogProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* context = reinterpret_cast<CustomDialogContext*>(GetWindowLongPtrW(window, GWLP_USERDATA));
 
-        // 与选项对话框一致的外观处理。
         switch (message) {
-        case WM_INITDIALOG:
-            ui::Attach(window);
-            // 复选框与下拉箭头由系统主题绘制，深色下需接管。自定义配置对话框里
-            // 没有这两个控件，取值会返回空句柄，函数内部已做保护。
-            ui::InstallDarkPaint(window, ui::ThemeOf(window).dark);
-            break;
+        case WM_INITDIALOG: {
+            context = reinterpret_cast<CustomDialogContext*>(lParam);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
+            CenterDialog(window);
+            const std::wstring script = WithWindowsLineEndings(context->site->customScript.empty()
+                ? DefaultCustomScript() : context->site->customScript);
+            SetDlgItemTextW(window, IDC_CUSTOM_SCRIPT, script.c_str());
+            SendDlgItemMessageW(window, IDC_CUSTOM_SCRIPT, EM_LIMITTEXT,
+                static_cast<WPARAM>(kMaxCustomScriptChars), 0);
+            SetDlgItemTextW(window, IDC_CUSTOM_STATUS,
+                L"请求只允许 HTTPS GET/POST，自动禁用 Cookie 与重定向；脚本不能访问文件、进程或网络对象。");
+            // 脚本编辑区用等宽字体；高度沿用对话框字体，DPI 缩放交给系统。
+            // 返回 FALSE 并自己设置焦点，避免对话框管理器默认“全选第一个编辑框”。
+            if (HWND editor = GetDlgItem(window, IDC_CUSTOM_SCRIPT)) {
+                LOGFONTW font{};
+                if (HFONT base = reinterpret_cast<HFONT>(SendMessageW(editor, WM_GETFONT, 0, 0))) {
+                    GetObjectW(base, sizeof(font), &font);
+                }
+                if (font.lfHeight == 0) font.lfHeight = -MulDiv(9, GetDpiForWindow(window), 72);
+                wcscpy_s(font.lfFaceName, L"Consolas");
+                font.lfWeight = FW_NORMAL;
+                font.lfItalic = FALSE;
+                font.lfQuality = CLEARTYPE_QUALITY;
+                if (HFONT mono = CreateFontIndirectW(&font)) {
+                    SendMessageW(editor, WM_SETFONT, reinterpret_cast<WPARAM>(mono), TRUE);
+                    SetPropW(window, L"aiapi.mono", reinterpret_cast<HANDLE>(mono));
+                }
+                SetFocus(editor);
+                SendMessageW(editor, EM_SETSEL, 0, 0);
+            }
+            return FALSE;
+        }
         case WM_DESTROY:
-            if (auto* mono = reinterpret_cast<HFONT>(RemovePropW(window, L"aiapi.ui.mono"))) {
+            if (auto* mono = reinterpret_cast<HFONT>(RemovePropW(window, L"aiapi.mono"))) {
                 DeleteObject(mono);
             }
-            ui::Detach(window);
             return FALSE;
-        case WM_ERASEBKGND: {
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            ui::PaintBackground(window, dc);
-            return TRUE;
-        }
-        case WM_CTLCOLORSTATIC:
-        case WM_CTLCOLOREDIT:
-        case WM_CTLCOLORLISTBOX:
-        case WM_CTLCOLORDLG: {
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            HWND control = reinterpret_cast<HWND>(lParam);
-            if (HBRUSH brush = ui::ControlColor(window, message, dc, control)) {
-                return reinterpret_cast<INT_PTR>(brush);
-            }
-            return FALSE;
-        }
-        case WM_DRAWITEM: {
-            const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
-            if (item && item->CtlType == ODT_BUTTON) {
-                ui::DrawOwnerButton(window, *item);
-                return TRUE;
+        case WM_CTLCOLORSTATIC: {
+            const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            if (id == IDC_CUSTOM_STATUS) {
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+                return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_BTNFACE));
             }
             return FALSE;
         }
@@ -675,35 +820,6 @@ private:
             break;
         }
 
-        if (message == WM_INITDIALOG) {
-            context = reinterpret_cast<CustomDialogContext*>(lParam);
-            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
-            SendMessageW(window, DM_SETDEFID, IDOK, 0);
-            std::wstring script = context->site->customScript.empty()
-                ? DefaultCustomScript() : context->site->customScript;
-            SetDlgItemTextW(window, IDC_CUSTOM_SCRIPT, script.c_str());
-            SendDlgItemMessageW(window, IDC_CUSTOM_SCRIPT, EM_LIMITTEXT,
-                static_cast<WPARAM>(kMaxCustomScriptChars), 0);
-            SetDlgItemTextW(window, IDC_CUSTOM_STATUS,
-                L"请求只允许 HTTPS GET/POST，自动禁用 Cookie 与重定向；脚本不能访问文件、进程或网络对象。");
-            // 脚本编辑区用等宽字体，代码对齐更清楚。
-            if (HWND editor = GetDlgItem(window, IDC_CUSTOM_SCRIPT)) {
-                LOGFONTW font{};
-                if (HFONT base = reinterpret_cast<HFONT>(SendMessageW(editor, WM_GETFONT, 0, 0))) {
-                    GetObjectW(base, sizeof(font), &font);
-                }
-                font.lfHeight = -MulDiv(9, ui::Dpi(window), 72);
-                wcscpy_s(font.lfFaceName, L"Consolas");
-                font.lfWeight = FW_NORMAL;
-                font.lfQuality = CLEARTYPE_QUALITY;
-                if (HFONT mono = CreateFontIndirectW(&font)) {
-                    SendMessageW(editor, WM_SETFONT, reinterpret_cast<WPARAM>(mono), TRUE);
-                    // 跟随对话框一起销毁：挂在 editor 的父窗口属性上统一释放
-                    SetPropW(window, L"aiapi.ui.mono", reinterpret_cast<HANDLE>(mono));
-                }
-            }
-            return TRUE;
-        }
         if (message != WM_COMMAND || !context) return FALSE;
         switch (LOWORD(wParam)) {
         case IDOK: {
@@ -756,70 +872,24 @@ private:
     static INT_PTR CALLBACK OptionsDialogProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* context = reinterpret_cast<DialogContext*>(GetWindowLongPtrW(window, GWLP_USERDATA));
 
-        // 外观消息不依赖 context，放在最前面处理。
         switch (message) {
-        case WM_INITDIALOG:
-            ui::Attach(window);
-            // 复选框与下拉箭头由系统主题绘制，深色下需接管。自定义配置对话框里
-            // 没有这两个控件，取值会返回空句柄，函数内部已做保护。
-            ui::InstallDarkPaint(window, ui::ThemeOf(window).dark);
-            break;
-        case WM_DESTROY:
-            ui::Detach(window);
-            return FALSE;
-        case WM_ERASEBKGND: {
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            ui::PaintBackground(window, dc);
-            return TRUE;
-        }
-        case WM_CTLCOLORSTATIC:
-        case WM_CTLCOLOREDIT:
-        case WM_CTLCOLORLISTBOX:
-        case WM_CTLCOLORDLG: {
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            HWND control = reinterpret_cast<HWND>(lParam);
-            if (HBRUSH brush = ui::ControlColor(window, message, dc, control)) {
-                return reinterpret_cast<INT_PTR>(brush);
-            }
-            return FALSE;
-        }
-        case WM_DRAWITEM: {
-            const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
-            if (item && item->CtlType == ODT_LISTBOX) {
-                ui::DrawOwnerListBox(window, *item);
-                return TRUE;
-            }
-            if (item && item->CtlType == ODT_BUTTON) {
-                ui::DrawOwnerButton(window, *item);
-                return TRUE;
-            }
-            return FALSE;
-        }
-        case WM_MEASUREITEM: {
-            auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
-            if (item && item->CtlType == ODT_LISTBOX) {
-                item->itemHeight = ui::MeasureListItem(window, *item);
-                return TRUE;
-            }
-            return FALSE;
-        }
-        default:
-            break;
-        }
-
-        if (message == WM_INITDIALOG) {
+        case WM_INITDIALOG: {
             context = reinterpret_cast<DialogContext*>(lParam);
             SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
-            // 主按钮是 BS_OWNERDRAW，与 BS_DEFPUSHBUTTON 的样式位互斥，
-            // 资源里写不了“自绘 + 默认按钮”，这里补回回车键的默认按钮语义。
-            SendMessageW(window, DM_SETDEFID, IDOK, 0);
-            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AIAPI（AIAPI 站点）"));
-            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"New API"));
-            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sub2API"));
-            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"自定义接口"));
-            SendDlgItemMessageW(window, IDC_SITE_NAME, EM_LIMITTEXT, static_cast<WPARAM>(kMaxSiteNameChars), 0);
-            SendDlgItemMessageW(window, IDC_SITE_BASE_URL, EM_LIMITTEXT, static_cast<WPARAM>(kMaxBaseUrlChars), 0);
-            SendDlgItemMessageW(window, IDC_SITE_CREDENTIAL, EM_LIMITTEXT, static_cast<WPARAM>(kMaxCredentialChars), 0);
+            INITCOMMONCONTROLSEX commonControls{ sizeof(commonControls), ICC_LISTVIEW_CLASSES };
+            InitCommonControlsEx(&commonControls);
+            CenterDialog(window);
+
+            for (const wchar_t* type : { L"AIAPI（AIAPI 站点）", L"New API", L"Sub2API", L"自定义接口" }) {
+                SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(type));
+            }
+            SendDlgItemMessageW(window, IDC_SITE_NAME, EM_LIMITTEXT,
+                static_cast<WPARAM>(kMaxSiteNameChars), 0);
+            SendDlgItemMessageW(window, IDC_SITE_BASE_URL, EM_LIMITTEXT,
+                static_cast<WPARAM>(kMaxBaseUrlChars), 0);
+            SendDlgItemMessageW(window, IDC_SITE_CREDENTIAL, EM_LIMITTEXT,
+                static_cast<WPARAM>(kMaxCredentialChars), 0);
             SendDlgItemMessageW(window, IDC_SITE_USER_ID, EM_LIMITTEXT, 32, 0);
             // 刷新间隔选项：秒数与显示文案一一对应，保存时按索引换算。
             for (int seconds : kRefreshChoices) {
@@ -828,27 +898,42 @@ private:
                     reinterpret_cast<LPARAM>(label.c_str()));
             }
             SelectRefreshChoice(window, context->refreshSeconds);
-            // 字段标签与页脚提示用次要文字色，形成层级。
-            for (int id : { IDC_GROUP_SITES, IDC_LABEL_TYPE, IDC_LABEL_NAME, IDC_SITE_BASE_URL_LABEL,
-                            IDC_SITE_CREDENTIAL_LABEL, IDC_SITE_USER_ID_LABEL, IDC_HINT, IDC_LABEL_REFRESH }) {
-                if (HWND label = GetDlgItem(window, id)) {
-                    ui::ApplyControlTheme(label, ui::ThemeOf(window).dark);
-                }
-            }
+            InitSiteListView(window);
             UpdateSiteList(window, context);
             return TRUE;
         }
+        case WM_CTLCOLORSTATIC: {
+            const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            if (id == IDC_STATUS || id == IDC_HINT || id == IDC_REFRESH_HINT) {
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+                return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_BTNFACE));
+            }
+            return FALSE;
+        }
+        case WM_NOTIFY: {
+            const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+            if (header && header->idFrom == IDC_SITE_LIST && header->code == LVN_ITEMCHANGED &&
+                context && !context->updatingList) {
+                const auto* changed = reinterpret_cast<const NMLISTVIEW*>(header);
+                if ((changed->uChanged & LVIF_STATE) && (changed->uNewState & LVIS_SELECTED) &&
+                    !(changed->uOldState & LVIS_SELECTED) && changed->iItem >= 0) {
+                    StoreSelectedSite(window, context);
+                    context->selectedIndex = changed->iItem;
+                    LoadSelectedSite(window, context);
+                }
+                return TRUE;
+            }
+            return FALSE;
+        }
+        default:
+            break;
+        }
+
         if (message != WM_COMMAND || !context) return FALSE;
 
         switch (LOWORD(wParam)) {
-        case IDC_SITE_LIST:
-            if (HIWORD(wParam) == LBN_SELCHANGE) {
-                const int selected = static_cast<int>(SendDlgItemMessageW(window, IDC_SITE_LIST, LB_GETCURSEL, 0, 0));
-                StoreSelectedSite(window, context);
-                context->selectedIndex = selected;
-                UpdateSiteList(window, context);
-            }
-            return TRUE;
         case IDC_SITE_TYPE:
             if (HIWORD(wParam) == CBN_SELCHANGE &&
                 context->selectedIndex >= 0 && context->selectedIndex < static_cast<int>(context->sites.size())) {
@@ -860,26 +945,25 @@ private:
                 auto& site = context->sites[index];
                 site.adapter = selectedAdapter;
                 if (previousAdapter != selectedAdapter) {
-                    if (!site.credential.empty()) SecureZeroMemory(site.credential.data(), site.credential.size() * sizeof(wchar_t));
+                    if (!site.credential.empty()) {
+                        SecureZeroMemory(site.credential.data(), site.credential.size() * sizeof(wchar_t));
+                    }
                     site.credential.clear();
-                    SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
                     if (previousAdapter == aiapi::SiteAdapter::AIAPI && selectedAdapter != aiapi::SiteAdapter::AIAPI &&
                         site.baseUrl == L"{AIAPI 站点}") {
                         site.baseUrl.clear();
-                        SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"");
                     }
                     if (previousAdapter == aiapi::SiteAdapter::NewAPI && selectedAdapter != aiapi::SiteAdapter::NewAPI) {
                         site.userId.clear();
-                        SetDlgItemTextW(window, IDC_SITE_USER_ID, L"");
                     }
                 }
-                UpdateAdapterFields(window, selectedAdapter, !site.credential.empty(), !site.customScript.empty());
+                UpdateSiteList(window, context);
             }
             return TRUE;
         case IDC_SITE_ADD:
             if (!StoreSelectedSite(window, context)) return TRUE;
             if (context->sites.size() >= kMaxSites) {
-                MessageBoxW(window, L"最多支持 8 个站点。", L"AIAPI 额度", MB_OK | MB_ICONINFORMATION);
+                MessageBoxW(window, L"最多支持 8 个站点。", L"多站点 AI 余额", MB_OK | MB_ICONINFORMATION);
                 return TRUE;
             }
             {
@@ -892,10 +976,17 @@ private:
                 context->selectedIndex = static_cast<int>(context->sites.size()) - 1;
                 UpdateSiteList(window, context);
             }
+            SetFocus(GetDlgItem(window, IDC_SITE_NAME));
+            SendDlgItemMessageW(window, IDC_SITE_NAME, EM_SETSEL, 0, -1);
             return TRUE;
         case IDC_SITE_REMOVE:
             if (!StoreSelectedSite(window, context)) return TRUE;
             if (context->selectedIndex >= 0 && context->selectedIndex < static_cast<int>(context->sites.size())) {
+                const std::wstring siteName = context->sites[static_cast<size_t>(context->selectedIndex)].name;
+                const std::wstring prompt = L"确定删除站点“" + siteName + L"”吗？保存后生效。";
+                if (MessageBoxW(window, prompt.c_str(), L"删除站点", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                    return TRUE;
+                }
                 ClearProfile(context->sites[static_cast<size_t>(context->selectedIndex)]);
                 context->sites.erase(context->sites.begin() + context->selectedIndex);
                 if (context->selectedIndex >= static_cast<int>(context->sites.size())) --context->selectedIndex;
@@ -912,13 +1003,15 @@ private:
             {
                 CustomDialogContext customContext{ &context->sites[static_cast<size_t>(context->selectedIndex)] };
                 const HMODULE module = ModuleHandle();
-                if (module) DialogBoxParamW(module, MAKEINTRESOURCEW(IDD_CUSTOM_CONFIG), window,
-                    CustomConfigDialogProc, reinterpret_cast<LPARAM>(&customContext));
+                if (module) {
+                    DialogBoxParamW(module, MAKEINTRESOURCEW(IDD_CUSTOM_CONFIG), window,
+                        CustomConfigDialogProc, reinterpret_cast<LPARAM>(&customContext));
+                }
             }
             return TRUE;
         case IDOK: {
             if (!StoreSelectedSite(window, context)) {
-                MessageBoxW(window, L"站点字段过长，未保存。", L"AIAPI 额度", MB_OK | MB_ICONERROR);
+                MessageBoxW(window, L"站点字段过长，未保存。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
                 return TRUE;
             }
             std::wstring validationError;
@@ -928,7 +1021,7 @@ private:
             }
             const int refreshSeconds = RefreshChoiceSeconds(window);
             if (!context->plugin->SetConfig(context->sites, refreshSeconds)) {
-                MessageBoxW(window, L"无法加密并保存站点配置。", L"AIAPI 额度", MB_OK | MB_ICONERROR);
+                MessageBoxW(window, L"无法加密并保存站点配置。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
                 return TRUE;
             }
             context->changed = true;

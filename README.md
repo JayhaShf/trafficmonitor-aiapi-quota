@@ -66,14 +66,13 @@ cmake --build build-win32 --config Release
 
 ## 界面
 
-选项对话框和“自定义接口配置”对话框使用 `src/UiTheme.h` + `src/UiControls.h` 提供的外观层：
+插件对话框沿用 TrafficMonitor 本体的界面语言：9pt 微软雅黑、7 DLU 标准边距、`GROUPBOX` 分组、14 DLU 高按钮与 12 DLU 高输入框，全部使用系统原生控件，不接管绘制。
 
-- **跟随系统深浅色**：读取 `AppsUseLightTheme`，深色模式同时套用窗口深色标题栏、深色控件主题与自绘配色。设置环境变量 `AIAPIQUOTA_UI_THEME=light`（或 `dark`）可强制指定，便于对比。
-- **DPI 自适应**：字体与所有留白按 `GetDpiForWindow` 缩放，125%/150% 下不糊、不裁切。
-- **自绘控件**：站点列表（状态圆点 + 选中强调条 + 省略号截断）、按钮（主/次/危险三态 + 焦点框）、复选框与下拉框（深色下接管系统绘制）。
-- **层级**：字段标签用次要文字色、说明文字放进圆角卡片、页脚有分隔线；主按钮使用强调色。
-
-只改外观，不改交互：控件类型、控件 ID、消息处理与保存逻辑均保持原样。`BS_OWNERDRAW` 与 `BS_DEFPUSHBUTTON` 的样式位互斥，回车键的默认按钮语义由 `DM_SETDEFID` 补回。
+- **站点列表**：与宿主“插件管理”一致的 `ListView` 报表视图，列出名称、类型、状态三列；选中站点后在右侧编辑。
+- **接口与凭据**：右侧表单按接口类型动态调整标签与可编辑项（AIAPI 地址固定、New API 需要数字 User ID、自定义接口才启用“自定义配置…”）。
+- **查询设置**：每站点“启用查询”复选框；全局刷新间隔下拉框（15 秒 ~ 15 分钟），并在页脚说明加密保存位置。
+- **原生主题与 DPI**：不自定义颜色和字体，跟随系统浅色/深色控件主题与高对比度设置；对话框单位与字体由系统按当前 DPI 缩放。
+- **自定义接口**：脚本编辑器使用等宽 Consolas，高度跟随对话框字体，占位符与隔离引擎限制在页脚说明。
 
 ### 界面预览工具
 
@@ -82,11 +81,11 @@ cmake --build build-win32 --config Release
 ```powershell
 # 构建（在 tools 目录；输出 exe 与宿主位数一致）
 cl /nologo /std:c++17 /EHsc /utf-8 /DUNICODE /D_UNICODE /I..\include dialog_preview.cpp ^
-   /link user32.lib gdi32.lib ole32.lib windowscodecs.lib crypt32.lib /OUT:dialog_preview.exe
+   /link user32.lib gdi32.lib ole32.lib windowscodecs.lib crypt32.lib comctl32.lib /OUT:dialog_preview.exe
 
 # 截图（--samples 会复制宿主真实配置到临时目录，带出真实站点列表）
-.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\opt-dark.png --samples
-.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\custom-dark.png --custom
+.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\options.png --samples
+.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\custom.png --custom
 ```
 
 它通过 `TMPluginGetInstance` → `OnInitialize` → `ShowOptionsDialog` 走真实加载路径，截图用 `PrintWindow`。`--samples` 只读取配置，只有你在对话框里点“保存”才会写回。

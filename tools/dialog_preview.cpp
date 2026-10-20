@@ -18,8 +18,14 @@
 #include "PluginInterface.h"
 
 #include <windows.h>
+#include <commctrl.h>
 #include <wincodec.h>
 #include <objbase.h>
+
+// 宿主 TrafficMonitor 的清单依赖 Common-Controls 6.0，对话框控件在宿主里是
+// 主题化外观。预览工具也声明同样的依赖，截图才与真实宿主一致。
+#pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' " \
+    "version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #include <cstdio>
 #include <string>
@@ -27,7 +33,7 @@
 
 namespace {
 
-const wchar_t* kDialogTitle = L"多站点余额查询设置";
+const wchar_t* kDialogTitle = L"多站点 AI 余额设置";
 
 // 诊断日志：控制台输出会和对话框线程交错，这里额外落一份文件。
 void Log(const wchar_t* format, ...) {
@@ -428,13 +434,17 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(700);
 
     // 选中第一个站点，让右侧字段与状态区有内容。
+    // 列表控件是 ListView，设置选中状态时也会同步触发 LVN_ITEMCHANGED。
     HWND list = GetDlgItem(dialog, 1001);
     if (list) {
-        if (SendMessageW(list, LB_GETCOUNT, 0, 0) > 0) {
-            SendMessageW(list, LB_SETCURSEL, 0, 0);
-            SendMessageW(list, WM_COMMAND, MAKEWPARAM(1001, LBN_SELCHANGE),
-                reinterpret_cast<LPARAM>(list));
-            Sleep(300);
+        if (SendMessageW(list, LVM_GETITEMCOUNT, 0, 0) > 0) {
+            LVITEMW item{};
+            item.mask = LVIF_STATE;
+            item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+            item.state = LVIS_SELECTED | LVIS_FOCUSED;
+            item.iItem = 0;
+            SendMessageW(list, LVM_SETITEMSTATE, 0, reinterpret_cast<LPARAM>(&item));
+            Sleep(400);
         }
     }
 

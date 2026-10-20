@@ -2,73 +2,83 @@
 #include <windows.h>
 #include "resource.h"
 
-// 布局基准：96 DPI 下的对话框单位（DLU），系统按当前 DPI 自动缩放。
-// 垂直节奏：分组 12 起，行距 26，标签-输入 5，输入高 20，按钮高 24。
+// 设计基准：与 TrafficMonitor 本体对话框一致 —— 9pt 微软雅黑、7 DLU 边距、
+// 14 DLU 高按钮、12 DLU 高编辑框、GROUPBOX 分组。全部使用系统原生控件，
+// 不接管绘制，因此跟随系统主题/高对比度，并由对话框单位自动适配 DPI。
 //
-// 自绘标记：
-//   LBS_OWNERDRAWFIXED | LBS_HASSTRINGS  — 站点列表由插件绘制（状态圆点 + 选中条）
-//   BS_OWNERDRAW                          — 按钮由插件绘制（主/次/危险三态）
-// 字符串仍由控件持有，业务代码照旧用 LB_ADDSTRING / LB_GETCURSEL / GetWindowText。
+// 布局：左右两栏（站点列表 / 选中站点的接口与凭据），底部一行全局刷新间隔，
+// 右下角主/次按钮。
 
-IDD_OPTIONS DIALOGEX 0, 0, 410, 322
+IDD_OPTIONS DIALOGEX 0, 0, 400, 258
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "多站点余额查询设置"
-FONT 9, "Segoe UI", 400, 0, 0x0
+CAPTION "多站点 AI 余额设置"
+FONT 9, "微软雅黑", 400, 0, 0x0
 BEGIN
-    // ── 左栏：站点 ──────────────────────────────────────────────────
-    LTEXT           "站点", IDC_GROUP_SITES, 14, 12, 120, 11
-    LISTBOX         IDC_SITE_LIST, 14, 26, 130, 152,
-                    LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS |
-                    WS_VSCROLL | WS_TABSTOP | WS_BORDER
-    AUTOCHECKBOX    "启用查询", IDC_SITE_ENABLED, 14, 184, 130, 12, WS_TABSTOP
+    // ── 左栏：站点列表 ──────────────────────────────────────────────
+    GROUPBOX        "站点", IDC_GROUP_SITES, 7, 7, 146, 200
 
-    LTEXT           "刷新间隔", IDC_LABEL_REFRESH, 14, 204, 44, 11
-    COMBOBOX        IDC_REFRESH_INTERVAL, 60, 201, 84, 120,
+    CONTROL         "", IDC_SITE_LIST, "SysListView32",
+                    LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
+                    14, 20, 132, 142
+
+    CONTROL         "启用查询", IDC_SITE_ENABLED, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 168, 132, 10
+    PUSHBUTTON      "新增站点", IDC_SITE_ADD, 14, 184, 62, 14
+    PUSHBUTTON      "删除站点", IDC_SITE_REMOVE, 82, 184, 60, 14
+
+    // ── 右栏：选中站点的详情 ────────────────────────────────────────
+    GROUPBOX        "接口与凭据", IDC_GROUP_DETAILS, 160, 7, 233, 200
+
+    LTEXT           "接口类型", IDC_LABEL_TYPE, 167, 18, 60, 8
+    COMBOBOX        IDC_SITE_TYPE, 167, 29, 146, 80,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "自定义配置…", IDC_CUSTOM_CONFIG, 316, 28, 68, 14
 
-    PUSHBUTTON      "新增站点", IDC_SITE_ADD, 14, 230, 63, 24, BS_OWNERDRAW
-    PUSHBUTTON      "删除", IDC_SITE_REMOVE, 81, 230, 63, 24, BS_OWNERDRAW
+    LTEXT           "显示名称", IDC_LABEL_NAME, 167, 49, 80, 8
+    EDITTEXT        IDC_SITE_NAME, 167, 60, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
 
-    // ── 右栏：详情 ──────────────────────────────────────────────────
-    LTEXT           "接口类型", IDC_LABEL_TYPE, 158, 12, 70, 11
-    COMBOBOX        IDC_SITE_TYPE, 158, 26, 154, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "自定义配置…", IDC_CUSTOM_CONFIG, 316, 26, 80, 21, BS_OWNERDRAW
+    LTEXT           "站点地址", IDC_SITE_BASE_URL_LABEL, 167, 80, 120, 8
+    EDITTEXT        IDC_SITE_BASE_URL, 167, 91, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "显示名称", IDC_LABEL_NAME, 158, 56, 70, 11
-    EDITTEXT        IDC_SITE_NAME, 158, 69, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "凭据", IDC_SITE_CREDENTIAL_LABEL, 167, 111, 220, 8
+    EDITTEXT        IDC_SITE_CREDENTIAL, 167, 122, 213, 12,
+                    ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "Base URL", IDC_SITE_BASE_URL_LABEL, 158, 95, 120, 11
-    EDITTEXT        IDC_SITE_BASE_URL, 158, 108, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "New API User ID", IDC_SITE_USER_ID_LABEL, 167, 142, 140, 8
+    EDITTEXT        IDC_SITE_USER_ID, 167, 153, 100, 12,
+                    ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 
-    LTEXT           "API Key / Session Token", IDC_SITE_CREDENTIAL_LABEL, 158, 134, 200, 11
-    EDITTEXT        IDC_SITE_CREDENTIAL, 158, 147, 238, 20, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "点击“新增站点”添加 AIAPI、New API、Sub2API 或自定义接口。",
+                    IDC_STATUS, 167, 172, 213, 24, SS_NOPREFIX
 
-    LTEXT           "New API User ID", IDC_SITE_USER_ID_LABEL, 158, 173, 140, 11
-    EDITTEXT        IDC_SITE_USER_ID, 158, 186, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+    // ── 底部：全局刷新间隔 + 页脚 ───────────────────────────────────
+    LTEXT           "刷新间隔", IDC_LABEL_REFRESH, 7, 217, 40, 8
+    COMBOBOX        IDC_REFRESH_INTERVAL, 49, 214, 84, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "所有启用站点按此间隔刷新；失败时自动延长重试间隔。",
+                    IDC_REFRESH_HINT, 140, 217, 250, 8, SS_NOPREFIX
 
-    // ── 状态说明卡片 ────────────────────────────────────────────────
-    LTEXT           "点击“新增站点”添加 AIAPI、New API、Sub2API 或自定义站点。",
-                    IDC_STATUS, 166, 216, 226, 56
-
-    // ── 页脚 ────────────────────────────────────────────────────────
-    LTEXT           "所有配置保存在同一个 DPAPI 加密文件中。", IDC_HINT, 14, 293, 230, 11
-    DEFPUSHBUTTON   "保存并关闭", IDOK, 258, 287, 68, 24, BS_OWNERDRAW
-    PUSHBUTTON      "取消", IDCANCEL, 328, 287, 68, 24, BS_OWNERDRAW
+    LTEXT           "配置使用当前用户的 DPAPI 加密保存在 sites.bin。",
+                    IDC_HINT, 7, 241, 250, 8, SS_NOPREFIX
+    DEFPUSHBUTTON   "保存并关闭", IDOK, 262, 238, 68, 14
+    PUSHBUTTON      "取消", IDCANCEL, 334, 238, 59, 14
 END
 
-IDD_CUSTOM_CONFIG DIALOGEX 0, 0, 430, 330
-STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+IDD_CUSTOM_CONFIG DIALOGEX 0, 0, 396, 283
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "自定义接口配置"
-FONT 9, "Segoe UI", 400, 0, 0x0
+FONT 9, "微软雅黑", 400, 0, 0x0
 BEGIN
-    LTEXT           "填写 CC-Switch 格式的 { request, extractor } 对象。可用占位符：{{baseUrl}}、{{apiKey}}、{{accessToken}}、{{userId}}。",
-                    IDC_CUSTOM_HELP, 12, 10, 406, 24
-    EDITTEXT        IDC_CUSTOM_SCRIPT, 12, 38, 406, 216,
-                    ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_HSCROLL |
-                    WS_TABSTOP | WS_BORDER
-    LTEXT           "隔离 JavaScript 引擎（16 MiB / 5 秒），无文件、进程或网络对象。测试会发送真实请求；POST 可能修改远端数据。",
-                    IDC_CUSTOM_STATUS, 12, 260, 406, 24
-    PUSHBUTTON      "测试脚本", IDC_CUSTOM_TEST, 236, 294, 56, 24, BS_OWNERDRAW
-    DEFPUSHBUTTON   "保存脚本", IDOK, 296, 294, 56, 24, BS_OWNERDRAW
-    PUSHBUTTON      "取消", IDCANCEL, 356, 294, 62, 24, BS_OWNERDRAW
+    LTEXT           "按 CC-Switch 格式填写 { request, extractor } 对象，用于该站点的余额请求与提取。",
+                    IDC_CUSTOM_HELP, 7, 7, 382, 8, SS_NOPREFIX
+    LTEXT           "可用占位符：{{baseUrl}}、{{apiKey}}、{{accessToken}}、{{userId}}。",
+                    IDC_CUSTOM_HELP2, 7, 18, 382, 8, SS_NOPREFIX
+    EDITTEXT        IDC_CUSTOM_SCRIPT, 7, 31, 382, 193,
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_WANTRETURN |
+                    WS_VSCROLL | WS_HSCROLL | WS_TABSTOP | WS_BORDER
+    LTEXT           "JavaScript 运行在隔离引擎中（16 MiB 内存 / 5 秒超时），无文件、进程或网络对象。测试会发送真实请求，POST 可能修改远端数据。",
+                    IDC_CUSTOM_STATUS, 7, 229, 382, 26, SS_NOPREFIX
+    PUSHBUTTON      "测试脚本", IDC_CUSTOM_TEST, 195, 262, 62, 14
+    DEFPUSHBUTTON   "保存脚本", IDOK, 261, 262, 60, 14
+    PUSHBUTTON      "取消", IDCANCEL, 325, 262, 64, 14
 END
