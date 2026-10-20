@@ -4,11 +4,11 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点。所有站点、启
 
 ## 站点适配器
 
-- **AIAPI**：API Key 先查询账户汇总 `GET /api/me/usage/overview`，尝试读取官网余额卡 `assetSummary.assetReadModel.walletBalanceUsd`；若该 Key 响应没有账户钱包字段，则回退 `GET /v1/usage` 并明确标为“API Key 可用额”，不冒充账户钱包。Key 响应含有限额时，套餐摘要显示 `5H`、`7D`、`1M` 的剩余百分比。已启用的 AIAPI 站点会话则查询 `GET /api/me/commerce/get-user-asset-summary`。账户字段按官网 Dashboard 的 CNY 格式显示；Key 金额按响应 `currency` 显示（缺省 CNY）。
+- **AIAPI**：API Key 查询 `GET /v1/usage`（`Authorization: Bearer <API Key>`、`Accept: application/json`）。剩余额度取 `data.available.amount`，缺省时退回 `data.limits.daily.remaining`；币种取 `data.currency`（缺省 CNY）。`data.available.limitedBy` 决定额度类别：`key_daily`/`key_weekly`/`key_monthly`/`key_total` 显示为日限额、周限额、月限额、总限额，`balance` 为钱包余额，`subscription` 为套餐。tooltip 附带 `data.key.name` 与 `data.today.cost/calls`，`data.limits.daily.limit > 0` 时再显示已用/总额。已启用的 AIAPI 站点会话（凭据以 `site-session=` 或 `sts_` 开头）则查询官网账户资产 `GET /api/me/commerce/get-user-asset-summary`，按官网 Dashboard 的 CNY 格式显示账户钱包余额。
 - **New API**：按 CC-Switch 模板 `GET /api/user/self`，使用 `Authorization: Bearer <System Access Token>`、`New-Api-User: <User ID>`、`User-Agent: cc-switch/1.0` 和 `Content-Type: application/json`。`quota` 与 `used_quota` 按模板假设的 `500000` 单位换算成 USD；若服务修改了 QuotaPerUnit，显示值也需按服务配置调整。
 - **Sub2API**：按 CC-Switch 模板 `GET /v1/usage`，使用 Bearer API Key 与 `User-Agent: cc-switch/1.0`。`remaining` 可能代表钱包、订阅组或单 Key 限额；插件显示 `planName`，只有明确的“钱包余额”分支才标作账户余额，其他显示为可用额。
 - **自定义接口**：用于 New API/Sub2API 预设未覆盖的服务。在站点类型选择“自定义接口”后点“自定义配置...”，编写 CC-Switch 格式的 `{ request, extractor }` 对象。
-- **提示排版**：每个启用站点单独一行，只显示站点名称和余额类别，不重复适配器名或额度来源。例如：`AIAPI（余额）：可用余额 ¥8.75`、`AIAPI（套餐）：5H 80% 7D 60% 1M 40%`。
+- **提示排版**：每个启用站点单独一行，只显示站点名称和余额类别，不重复适配器名或额度来源。例如：`AIAPI（余额）：¥8.75；Key default；今日 1.23 · 5 次`、`AIAPI（日限额）：¥6.50；已用 3.50/10.00`。
 
 ```javascript
 ({

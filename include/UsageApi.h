@@ -39,6 +39,11 @@ struct SiteBalance {
     std::string unit = "USD";
     std::wstring packageSummary;
     std::wstring detail;
+    // 额度类别（如“余额/可用额/日限额/套餐”）。适配器给出时优先用它做显示标签，
+    // 为空时界面按 accountBalance/packageSummary 推断。
+    std::wstring scopeLabel;
+    // tooltip 中追加的说明（Key 名称、今日消费/次数、限额用量等），可为空。
+    std::wstring extra;
     std::wstring error;
 };
 

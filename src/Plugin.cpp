@@ -184,7 +184,10 @@ struct SiteValue {
     std::wstring value = L"--";
     std::wstring fullValue = L"--";
     std::wstring packageSummary;
-    std::wstring detail;
+    // 额度类别（如“余额/日限额/套餐”），为空时按 packageSummary/accountBalance 推断。
+    std::wstring label;
+    // tooltip 追加说明（Key 名称、今日消费/次数等）。
+    std::wstring extra;
     std::wstring error;
     bool success = false;
 };
@@ -251,7 +254,7 @@ public:
         case TMI_DESCRIPTION: return L"AIAPI（AIAPI 站点）、New API、Sub2API 专用适配器及自定义接口";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"2.4.0";
+        case TMI_VERSION: return L"2.5.0";
         case TMI_URL: return L"{AIAPI 站点}";
         default: return L"";
         }
@@ -1015,8 +1018,12 @@ private:
             value.adapter = result.adapter;
             value.accountBalance = result.accountBalance;
             value.packageSummary = result.packageSummary;
+            value.label = result.scopeLabel;
+            value.extra = result.extra;
             const bool isPackage = !result.packageSummary.empty();
-            value.itemName = result.name + (isPackage ? L" 套餐" : (result.accountBalance ? L" 余额" : L" 可用额"));
+            const std::wstring category = !result.scopeLabel.empty() ? result.scopeLabel
+                : (isPackage ? L"套餐" : (result.accountBalance ? L"余额" : L"可用额"));
+            value.itemName = result.name + L" " + category;
             value.itemId = MakeItemId(result.id);
             value.error = result.error;
             const SiteValue* oldValue = nullptr;
@@ -1038,6 +1045,8 @@ private:
                     value.success = oldValue->success;
                     value.accountBalance = oldValue->accountBalance;
                     value.packageSummary = oldValue->packageSummary;
+                    value.label = oldValue->label;
+                    value.extra = oldValue->extra;
                     value.itemName = oldValue->itemName;
                     value.value = oldValue->value;
                     value.fullValue = oldValue->fullValue;
@@ -1047,6 +1056,8 @@ private:
                 value.success = oldValue->success;
                 value.accountBalance = oldValue->accountBalance;
                 value.packageSummary = oldValue->packageSummary;
+                value.label = oldValue->label;
+                value.extra = oldValue->extra;
                 value.itemName = oldValue->itemName;
                 value.value = oldValue->value;
                 value.fullValue = oldValue->fullValue;
@@ -1060,7 +1071,9 @@ private:
                 // 退避中的站点：不显示错误，只说明数值是上次结果。
                 if (oldValue && oldValue->success) {
                     const bool oldPackage = !oldValue->packageSummary.empty();
-                    tip += oldPackage ? L"套餐" : (oldValue->accountBalance ? L"余额" : L"可用额");
+                    const std::wstring oldCategory = !oldValue->label.empty() ? oldValue->label
+                        : (oldPackage ? L"套餐" : (oldValue->accountBalance ? L"余额" : L"可用额"));
+                    tip += oldCategory;
                     tip += L"）：" + (oldPackage ? oldValue->packageSummary : oldValue->fullValue);
                     tip += L"（稍后刷新）";
                 } else {
@@ -1071,11 +1084,12 @@ private:
                     tip += L"套餐）：" + result.packageSummary;
                     if (result.packageSummary.find(L'%') == std::wstring::npos)
                         tip += L" 剩余 " + value.fullValue;
-                } else if (result.accountBalance) {
-                    tip += L"余额）：可用余额 " + value.fullValue;
                 } else {
-                    tip += L"可用额）：" + value.fullValue;
+                    tip += category + L"）：";
+                    if (result.accountBalance && result.scopeLabel.empty()) tip += L"可用余额 ";
+                    tip += value.fullValue;
                 }
+                if (!result.extra.empty()) tip += L"；" + result.extra;
             } else {
                 tip += L"查询失败）：" + (result.error.empty() ? L"未获取到余额" : result.error);
                 if (oldValue && oldValue->success) tip += L"（上次 " + oldValue->fullValue + L"）";
@@ -1522,6 +1536,7 @@ const wchar_t* PluginItem::GetItemLableText() const {
     held = owner_->GetSnapshot();
     if (!held || itemIndex_ < 0 || itemIndex_ >= static_cast<int>(held->sites.size())) return L"余额";
     const auto& site = held->sites[static_cast<size_t>(itemIndex_)];
+    if (!site.label.empty()) return site.label.c_str();
     if (!site.packageSummary.empty()) return L"套餐";
     return site.accountBalance ? L"余额" : L"可用额";
 }

@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cwchar>
 #include <cwctype>
+#include <iomanip>
 #include <iterator>
 #include <locale>
 #include <map>
@@ -329,6 +330,20 @@ std::string NarrowUtf8(const std::wstring& text) {
     return result;
 }
 
+// 从错误响应体里取一条可直接显示的简短原因（API 的 message 或 error.message）。
+bool ExtractJsonMessage(const std::string& body, std::wstring& message) {
+    JsonValue root;
+    if (!ParseDocument(body, root)) return false;
+    std::string text;
+    if (!ReadString(Member(&root, "message"), text) || text.empty()) {
+        const JsonValue* error = Member(&root, "error");
+        if (!ReadString(Member(error, "message"), text) || text.empty()) return false;
+    }
+    if (text.size() > 200) return false;
+    message = WidenUtf8(text);
+    return !message.empty();
+}
+
 bool RunCustomJavaScript(const std::wstring& script, std::wstring& output, std::wstring& error) {
     constexpr size_t memoryLimit = 16 * 1024 * 1024;
     constexpr auto executionLimit = std::chrono::seconds(5);
@@ -631,15 +646,9 @@ HttpResult GetJson(const std::wstring& url, const std::wstring& credential,
         return result;
     }
     result.status = statusCode;
-    if (statusCode == 401 || statusCode == 403) {
-        result.error = L"认证失败 (HTTP " + std::to_wstring(statusCode) + L")。";
-        return result;
-    }
-    if (statusCode < 200 || statusCode >= 300) {
-        result.error = L"站点返回 HTTP " + std::to_wstring(statusCode) + L"。";
-        return result;
-    }
 
+    // 先读取响应体：认证失败和 4xx/5xx 的 JSON 里往往带有可直接展示的原因，
+    // 例如 AIAPI 的 {"ok":false,"message":"API key is invalid"}。
     for (;;) {
         DWORD available = 0;
         if (!WinHttpQueryDataAvailable(request.get(), &available)) {
@@ -660,11 +669,24 @@ HttpResult GetJson(const std::wstring& url, const std::wstring& credential,
         if (bytesRead == 0) break;
         result.body.append(buffer.data(), bytesRead);
     }
+
+    std::wstring responseMessage;
+    const bool hasMessage = ExtractJsonMessage(result.body, responseMessage);
+    if (statusCode == 401 || statusCode == 403) {
+        result.error = L"认证失败 (HTTP " + std::to_wstring(statusCode) + L")";
+        result.error += hasMessage ? L"：" + responseMessage : L"。";
+        return result;
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+        result.error = L"站点返回 HTTP " + std::to_wstring(statusCode);
+        result.error += hasMessage ? L"：" + responseMessage : L"。";
+        return result;
+    }
     result.success = true;
     return result;
 }
 
-bool ParseAIAPI(const std::string& body, bool siteSession, SiteBalance& output) {
+bool ParseAIAPI(const std::string& body, SiteBalance& output) {
     JsonValue root;
     if (!ParseDocument(body, root)) {
         output.error = L"AIAPI 返回的内容不是有效 JSON。";
@@ -692,9 +714,7 @@ bool ParseAIAPI(const std::string& body, bool siteSession, SiteBalance& output) 
     const JsonValue* wallet = Member(data, "wallet");
     if (!found) found = ReadNumber(Member(wallet, "balanceUsd"), walletBalance);
     if (!found || !std::isfinite(walletBalance) || walletBalance < 0.0) {
-        output.error = siteSession
-            ? L"AIAPI 会话响应中没有账户钱包余额字段，请检查站点接口版本。"
-            : L"API Key 响应中没有账户钱包余额字段；请在本机选项中配置新签发的 AIAPI 会话。";
+        output.error = L"AIAPI 会话响应中没有账户钱包余额字段，请检查站点接口版本。";
         return false;
     }
     output.remaining = walletBalance;
@@ -702,35 +722,32 @@ bool ParseAIAPI(const std::string& body, bool siteSession, SiteBalance& output) 
 
     // The public dashboard formats this read-model value with its CNY formatter directly.
     output.unit = "CNY";
-    output.detail = siteSession ? L"官网账户余额（站点会话）" : L"官网账户余额（API Key）";
+    output.detail = L"官网账户余额（站点会话）";
     return true;
 }
 
-void AppendWindowPercent(const JsonValue* accountLimits, const JsonValue* keyLimits,
-    const char* field, const wchar_t* label, std::wstring& summary) {
-    const JsonValue* period = Member(accountLimits, field);
-    double limit = 0.0;
-    bool usable = ReadNumber(Member(period, "limit"), limit) && limit > 0.0;
-    if (!usable) {
-        period = Member(keyLimits, field);
-        usable = ReadNumber(Member(period, "limit"), limit) && limit > 0.0;
-    }
-    if (!usable) return;
-
-    double remaining = 0.0;
-    if (!ReadNumber(Member(period, "remaining"), remaining)) {
-        double used = 0.0;
-        if (!ReadNumber(Member(period, "used"), used)) return;
-        remaining = limit - used;
-    }
-    const double percent = std::clamp(remaining * 100.0 / limit, 0.0, 100.0);
-    if (!summary.empty()) summary += L"  ";
-    summary += label;
-    summary += L" ";
-    summary += std::to_wstring(static_cast<unsigned int>(std::lround(percent)));
-    summary += L"%";
+// /v1/usage 的 available.limitedBy → 显示类别。CC-Switch 脚本里用完整名称，
+// TrafficMonitor 的显示项目标签要尽量短，所以这里给出短标签。
+std::wstring AIAPIScopeLabel(const std::string& limitedBy) {
+    if (limitedBy == "key_daily") return L"日限额";
+    if (limitedBy == "key_weekly") return L"周限额";
+    if (limitedBy == "key_monthly") return L"月限额";
+    if (limitedBy == "key_total") return L"总限额";
+    if (limitedBy == "balance") return L"余额";
+    if (limitedBy == "subscription") return L"套餐";
+    return L"";
 }
 
+std::wstring FormatNumber(double value, int precision) {
+    std::wostringstream stream;
+    stream.imbue(std::locale::classic());
+    stream << std::fixed << std::setprecision(precision) << value;
+    return stream.str();
+}
+
+// 对应 CC-Switch 的 AIAPI 模板：GET /v1/usage，Authorization: Bearer <API Key>。
+// 响应：{ ok, message, data: { currency, available{amount, limitedBy},
+//         limits{daily{limit, remaining, used}}, today{cost, calls}, key{name} } }
 bool ParseAIAPIKeyUsage(const std::string& body, SiteBalance& output) {
     JsonValue root;
     if (!ParseDocument(body, root)) {
@@ -740,27 +757,85 @@ bool ParseAIAPIKeyUsage(const std::string& body, SiteBalance& output) {
     const JsonValue* ok = Member(&root, "ok");
     if (ok && ok->kind == JsonValue::Kind::Boolean && !ok->boolean) {
         std::string message;
-        if (ReadString(Member(&root, "message"), message)) output.error = WidenUtf8(message);
-        else output.error = L"AIAPI 拒绝了此 API Key。";
+        if (ReadString(Member(&root, "message"), message) && !message.empty()) {
+            output.error = WidenUtf8(message);
+        } else {
+            output.error = L"AIAPI 拒绝了此 API Key。";
+        }
         return false;
     }
     const JsonValue* data = Member(&root, "data");
-    const JsonValue* available = Member(data, "available");
-    if (!ReadNumber(Member(available, "amount"), output.remaining) ||
-        !std::isfinite(output.remaining) || output.remaining < 0.0) {
-        output.error = L"API Key 响应没有有效的 available.amount。";
+    if (!data || data->kind != JsonValue::Kind::Object) {
+        output.error = L"AIAPI /v1/usage 响应缺少 data 对象。";
         return false;
     }
+
     output.unit = "CNY";
     std::string unit;
     if (ReadString(Member(data, "currency"), unit) && !unit.empty()) output.unit = unit;
-    const JsonValue* accountLimits = Member(data, "accountLimits");
-    const JsonValue* keyLimits = Member(data, "limits");
-    AppendWindowPercent(accountLimits, keyLimits, "fiveHour", L"5H", output.packageSummary);
-    AppendWindowPercent(accountLimits, keyLimits, "weekly", L"7D", output.packageSummary);
-    AppendWindowPercent(accountLimits, keyLimits, "monthly", L"1M", output.packageSummary);
-    output.detail.clear();
-    output.accountBalance = false;
+
+    const JsonValue* available = Member(data, "available");
+    const JsonValue* limits = Member(data, "limits");
+    const JsonValue* daily = Member(limits, "daily");
+    const JsonValue* today = Member(data, "today");
+    const JsonValue* key = Member(data, "key");
+
+    std::string limitedBy;
+    ReadString(Member(available, "limitedBy"), limitedBy);
+    output.scopeLabel = AIAPIScopeLabel(limitedBy);
+    output.accountBalance = limitedBy == "balance";
+
+    // available.amount 优先（0 也是有效值）；缺省时退回日限额剩余。
+    double remaining = 0.0;
+    if (!ReadNumber(Member(available, "amount"), remaining) &&
+        !ReadNumber(Member(daily, "remaining"), remaining)) {
+        output.error = L"AIAPI /v1/usage 响应没有有效的 available.amount 或 limits.daily.remaining。";
+        return false;
+    }
+    if (!std::isfinite(remaining) || remaining < 0.0) {
+        output.error = L"AIAPI /v1/usage 返回的剩余额度无效。";
+        return false;
+    }
+    output.remaining = remaining;
+
+    // 日限额：limit > 0 时记录已用/总额，tooltip 里附“已用 x/y”。
+    double dailyLimit = 0.0;
+    double dailyUsed = 0.0;
+    const bool hasDailyLimit = ReadNumber(Member(daily, "limit"), dailyLimit) &&
+        std::isfinite(dailyLimit) && dailyLimit > 0.0;
+    if (hasDailyLimit) {
+        output.hasTotal = true;
+        output.total = dailyLimit;
+        output.hasUsed = ReadNumber(Member(daily, "used"), dailyUsed) &&
+            std::isfinite(dailyUsed) && dailyUsed >= 0.0;
+        if (output.hasUsed) output.used = dailyUsed;
+    }
+
+    // planName/extra：脚本里 planName 含类别，这里类别已单独作为标签，故只保留 Key 名称。
+    std::wstring planName = L"账户";
+    std::string keyName;
+    if (ReadString(Member(key, "name"), keyName) && !keyName.empty()) {
+        planName = L"Key " + WidenUtf8(keyName);
+    }
+    output.detail = planName;
+
+    std::wstring extra = planName;
+    double cost = 0.0;
+    double calls = 0.0;
+    const bool hasCost = ReadNumber(Member(today, "cost"), cost) && std::isfinite(cost);
+    const bool hasCalls = ReadNumber(Member(today, "calls"), calls) && std::isfinite(calls) && calls >= 0.0;
+    if (hasCost || hasCalls) {
+        extra += L"；今日 ";
+        if (hasCost) extra += FormatNumber(cost, 2);
+        if (hasCalls) {
+            if (hasCost) extra += L" · ";
+            extra += FormatNumber(calls, 0) + L" 次";
+        }
+    }
+    if (output.hasTotal && output.hasUsed) {
+        extra += L"；已用 " + FormatNumber(output.used, 2) + L"/" + FormatNumber(output.total, 2);
+    }
+    output.extra = extra;
     return true;
 }
 
@@ -970,40 +1045,23 @@ SiteBalance FetchSiteBalance(const SiteProfile& profile) {
 
     try {
         if (profile.adapter == SiteAdapter::AIAPI) {
-            const bool siteSession = IsSiteSessionCredential(profile.credential);
-            if (siteSession) {
+            // 站点会话（Cookie）查询账户资产；普通 API Key 使用 CC-Switch 模板的
+            // GET /v1/usage 接口，响应里的 available.limitedBy 决定额度类别。
+            if (IsSiteSessionCredential(profile.credential)) {
                 const auto response = GetJson(AdapterUrl(profile, L"/api/me/commerce/get-user-asset-summary"),
                     profile.credential, L"", true);
                 if (!response.success) output.error = EndpointError(response, L"AIAPI 账户钱包接口");
-                else if (!ParseAIAPI(response.body, true, output)) {
+                else if (!ParseAIAPI(response.body, output)) {
                     if (output.error.empty()) output.error = L"AIAPI 会话响应格式无效。";
                 } else output.success = true;
                 return output;
             }
 
-            SiteBalance accountResult = output;
-            const auto accountResponse = GetJson(AdapterUrl(profile, L"/api/me/usage/overview"),
-                profile.credential, L"", false);
-            if (accountResponse.success && ParseAIAPI(accountResponse.body, false, accountResult)) {
-                output = std::move(accountResult);
-                output.success = true;
-                return output;
-            }
-
-            const std::wstring accountError = accountResponse.success
-                ? (accountResult.error.empty() ? L"账户钱包字段不可用" : accountResult.error)
-                : EndpointError(accountResponse, L"AIAPI 账户资产接口");
-            SiteBalance keyResult = output;
-            const auto keyResponse = GetJson(AdapterUrl(profile, L"/v1/usage"), profile.credential, L"", false);
-            if (keyResponse.success && ParseAIAPIKeyUsage(keyResponse.body, keyResult)) {
-                output = std::move(keyResult);
-                output.success = true;
-                return output;
-            }
-            const std::wstring keyError = keyResponse.success
-                ? (keyResult.error.empty() ? L"响应格式无效" : keyResult.error)
-                : EndpointError(keyResponse, L"AIAPI Key 用量接口");
-            output.error = L"账户钱包查询失败（" + accountError + L"）；Key 可用额查询也失败（" + keyError + L"）。";
+            const auto response = GetJson(AdapterUrl(profile, L"/v1/usage"), profile.credential, L"", false);
+            if (!response.success) output.error = EndpointError(response, L"AIAPI 用量接口");
+            else if (!ParseAIAPIKeyUsage(response.body, output)) {
+                if (output.error.empty()) output.error = L"AIAPI 用量响应格式无效。";
+            } else output.success = true;
             return output;
         }
 
