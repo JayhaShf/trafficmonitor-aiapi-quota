@@ -1,0 +1,74 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+// 布局基准：96 DPI 下的对话框单位（DLU），系统按当前 DPI 自动缩放。
+// 垂直节奏：分组 12 起，行距 26，标签-输入 5，输入高 20，按钮高 24。
+//
+// 自绘标记：
+//   LBS_OWNERDRAWFIXED | LBS_HASSTRINGS  — 站点列表由插件绘制（状态圆点 + 选中条）
+//   BS_OWNERDRAW                          — 按钮由插件绘制（主/次/危险三态）
+// 字符串仍由控件持有，业务代码照旧用 LB_ADDSTRING / LB_GETCURSEL / GetWindowText。
+
+IDD_OPTIONS DIALOGEX 0, 0, 410, 322
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "多站点余额查询设置"
+FONT 9, "Segoe UI", 400, 0, 0x0
+BEGIN
+    // ── 左栏：站点 ──────────────────────────────────────────────────
+    LTEXT           "站点", IDC_GROUP_SITES, 14, 12, 120, 11
+    LISTBOX         IDC_SITE_LIST, 14, 26, 130, 152,
+                    LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS |
+                    WS_VSCROLL | WS_TABSTOP | WS_BORDER
+    AUTOCHECKBOX    "启用查询", IDC_SITE_ENABLED, 14, 184, 130, 12, WS_TABSTOP
+
+    LTEXT           "刷新间隔", IDC_LABEL_REFRESH, 14, 204, 44, 11
+    COMBOBOX        IDC_REFRESH_INTERVAL, 60, 201, 84, 120,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    PUSHBUTTON      "新增站点", IDC_SITE_ADD, 14, 230, 63, 24, BS_OWNERDRAW
+    PUSHBUTTON      "删除", IDC_SITE_REMOVE, 81, 230, 63, 24, BS_OWNERDRAW
+
+    // ── 右栏：详情 ──────────────────────────────────────────────────
+    LTEXT           "接口类型", IDC_LABEL_TYPE, 158, 12, 70, 11
+    COMBOBOX        IDC_SITE_TYPE, 158, 26, 154, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "自定义配置…", IDC_CUSTOM_CONFIG, 316, 26, 80, 21, BS_OWNERDRAW
+
+    LTEXT           "显示名称", IDC_LABEL_NAME, 158, 56, 70, 11
+    EDITTEXT        IDC_SITE_NAME, 158, 69, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "Base URL", IDC_SITE_BASE_URL_LABEL, 158, 95, 120, 11
+    EDITTEXT        IDC_SITE_BASE_URL, 158, 108, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "API Key / Session Token", IDC_SITE_CREDENTIAL_LABEL, 158, 134, 200, 11
+    EDITTEXT        IDC_SITE_CREDENTIAL, 158, 147, 238, 20, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "New API User ID", IDC_SITE_USER_ID_LABEL, 158, 173, 140, 11
+    EDITTEXT        IDC_SITE_USER_ID, 158, 186, 238, 20, ES_AUTOHSCROLL | WS_TABSTOP
+
+    // ── 状态说明卡片 ────────────────────────────────────────────────
+    LTEXT           "点击“新增站点”添加 AIAPI、New API、Sub2API 或自定义站点。",
+                    IDC_STATUS, 166, 216, 226, 56
+
+    // ── 页脚 ────────────────────────────────────────────────────────
+    LTEXT           "所有配置保存在同一个 DPAPI 加密文件中。", IDC_HINT, 14, 293, 230, 11
+    DEFPUSHBUTTON   "保存并关闭", IDOK, 258, 287, 68, 24, BS_OWNERDRAW
+    PUSHBUTTON      "取消", IDCANCEL, 328, 287, 68, 24, BS_OWNERDRAW
+END
+
+IDD_CUSTOM_CONFIG DIALOGEX 0, 0, 430, 330
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+CAPTION "自定义接口配置"
+FONT 9, "Segoe UI", 400, 0, 0x0
+BEGIN
+    LTEXT           "填写 CC-Switch 格式的 { request, extractor } 对象。可用占位符：{{baseUrl}}、{{apiKey}}、{{accessToken}}、{{userId}}。",
+                    IDC_CUSTOM_HELP, 12, 10, 406, 24
+    EDITTEXT        IDC_CUSTOM_SCRIPT, 12, 38, 406, 216,
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_HSCROLL |
+                    WS_TABSTOP | WS_BORDER
+    LTEXT           "隔离 JavaScript 引擎（16 MiB / 5 秒），无文件、进程或网络对象。测试会发送真实请求；POST 可能修改远端数据。",
+                    IDC_CUSTOM_STATUS, 12, 260, 406, 24
+    PUSHBUTTON      "测试脚本", IDC_CUSTOM_TEST, 236, 294, 56, 24, BS_OWNERDRAW
+    DEFPUSHBUTTON   "保存脚本", IDOK, 296, 294, 56, 24, BS_OWNERDRAW
+    PUSHBUTTON      "取消", IDCANCEL, 356, 294, 62, 24, BS_OWNERDRAW
+END

@@ -1,0 +1,29 @@
+# Local builds and IDE state
+/build/
+/build-*/
+/out/
+/.vs/
+*.user
+*.suo
+*.pdb
+*.ilk
+*.obj
+*.exp
+*.lib
+*.tlog/
+*.lastbuildstate
+
+# Local plugin credentials and backups
+sites.bin
+api-key.bin
+*.tmp
+*.backup-*
+
+# Windows Explorer metadata
+Thumbs.db
+Desktop.ini
+
+# 界面预览工具的本地构建产物与截图
+/tools/*.exe
+/tools/*.obj
+/tools/shots/
