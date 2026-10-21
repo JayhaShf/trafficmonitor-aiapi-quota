@@ -1,5 +1,6 @@
 #include "PluginInterface.h"
 #include "UsageApi.h"
+#include "ProviderRegistry.h"
 #include "resource.h"
 
 #include <windows.h>
@@ -251,10 +252,10 @@ public:
     const wchar_t* GetInfo(PluginInfoIndex index) override {
         switch (index) {
         case TMI_NAME: return L"多站点 AI 余额";
-        case TMI_DESCRIPTION: return L"AIAPI（AIAPI 站点）、New API、Sub2API 专用适配器及自定义接口";
+        case TMI_DESCRIPTION: return L"AIAPI/New API/Sub2API 中转站、自定义接口，以及 DeepSeek 等官方余额、Kimi 等 Token Plan、Claude/Codex 官方订阅";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"2.6.0";
+        case TMI_VERSION: return L"3.0.0";
         case TMI_URL: return L"{AIAPI 站点}";
         default: return L"";
         }
@@ -462,20 +463,16 @@ private:
     }
 
     static int AdapterComboIndex(aiapi::SiteAdapter adapter) {
-        switch (adapter) {
-        case aiapi::SiteAdapter::AIAPI: return 0;
-        case aiapi::SiteAdapter::NewAPI: return 1;
-        case aiapi::SiteAdapter::Sub2API: return 2;
-        case aiapi::SiteAdapter::Custom: return 3;
+        for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
+            const auto* preset = aiapi::ProviderPresetAt(i);
+            if (preset && preset->provider == adapter) return static_cast<int>(i);
         }
         return 0;
     }
 
     static aiapi::SiteAdapter AdapterFromCombo(int index) {
-        if (index == 0) return aiapi::SiteAdapter::AIAPI;
-        if (index == 1) return aiapi::SiteAdapter::NewAPI;
-        if (index == 2) return aiapi::SiteAdapter::Sub2API;
-        return aiapi::SiteAdapter::Custom;
+        const auto* preset = index >= 0 ? aiapi::ProviderPresetAt(static_cast<size_t>(index)) : nullptr;
+        return preset ? preset->provider : aiapi::SiteAdapter::AIAPI;
     }
 
     // 对话框居中：优先对齐可见的父窗口，否则退回屏幕工作区（宿主主窗口可能隐藏）。
@@ -553,57 +550,118 @@ private:
     }
 
     static const wchar_t* AdapterDisplayName(aiapi::SiteAdapter adapter) {
-        switch (adapter) {
-        case aiapi::SiteAdapter::AIAPI: return L"AIAPI";
-        case aiapi::SiteAdapter::NewAPI: return L"New API";
-        case aiapi::SiteAdapter::Sub2API: return L"Sub2API";
-        case aiapi::SiteAdapter::Custom: return L"自定义接口";
-        }
-        return L"";
+        const auto* preset = aiapi::FindProviderPreset(adapter);
+        return preset ? preset->shortName : L"未知";
     }
 
     static void UpdateAdapterFields(HWND window, aiapi::SiteAdapter adapter,
         bool hasCredential, bool hasCustomScript) {
+        const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(adapter);
+        if (!preset) return;
         const bool newApi = adapter == aiapi::SiteAdapter::NewAPI;
         const bool custom = adapter == aiapi::SiteAdapter::Custom;
-        EnableWindow(GetDlgItem(window, IDC_SITE_BASE_URL), adapter == aiapi::SiteAdapter::AIAPI ? FALSE : TRUE);
+        const bool needsCredential = preset->needsCredential;
+
+        EnableWindow(GetDlgItem(window, IDC_SITE_BASE_URL),
+            preset->baseUrlMode == aiapi::FieldMode::Editable ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID), newApi ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID_LABEL), newApi ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_CUSTOM_CONFIG), custom ? TRUE : FALSE);
+        EnableWindow(GetDlgItem(window, IDC_SITE_CREDENTIAL), needsCredential || custom ? TRUE : FALSE);
+
+        // 固定/隐藏地址的显示值统一由预设决定，避免旧配置里的残留值误导。
+        if (preset->baseUrlMode == aiapi::FieldMode::Fixed && preset->defaultBaseUrl) {
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL, preset->defaultBaseUrl);
+        } else if (preset->baseUrlMode == aiapi::FieldMode::Hidden) {
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"（使用本机 CLI 凭据）");
+        }
+
+        std::wstring credentialLabel = preset->credentialLabel ? preset->credentialLabel : L"凭据";
+        if (hasCredential && needsCredential) credentialLabel += L"（已保存）";
+        SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, credentialLabel.c_str());
 
         switch (adapter) {
         case aiapi::SiteAdapter::AIAPI:
-            SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"{AIAPI 站点}");
             SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"站点地址（固定）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
-                hasCredential ? L"API Key / 站点会话（已保存）" : L"API Key / 站点会话");
-            SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"已保存 AIAPI 凭据。后台按 /v1/usage 查询剩余额度，自动识别钱包余额、套餐或限额类别。"
-                : L"填写 AIAPI API Key（或本机签发的站点会话凭据）后，插件才会开始查询余额。");
             break;
         case aiapi::SiteAdapter::NewAPI:
             SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"New API Base URL");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
-                hasCredential ? L"System Access Token（已保存）" : L"System Access Token");
-            SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"已保存 System Access Token。User ID 必须是数字；额度按 CC-Switch 模板的 500000 单位换算。"
-                : L"填写 New API Base URL、System Access Token 和数字 User ID，按用户账户 quota 查询。");
             break;
         case aiapi::SiteAdapter::Sub2API:
             SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"站点根 URL（可带 /v1）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL,
-                hasCredential ? L"API Key（Bearer，已保存）" : L"API Key（Bearer）");
-            SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? L"已保存 Sub2API API Key。请求为 GET <Base URL>/v1/usage；凭据留空表示保留已保存的值。"
-                : L"填写 Sub2API 站点根 URL 和 API Key；Base URL 可带或不带 /v1，无需 User ID。");
             break;
         case aiapi::SiteAdapter::Custom:
             SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"自定义 Base URL（相对 URL 前缀）");
-            SetDlgItemTextW(window, IDC_SITE_CREDENTIAL_LABEL, L"API Key（脚本占位符，可选）");
-            SetDlgItemTextW(window, IDC_STATUS, hasCustomScript
-                ? L"已配置自定义 request / extractor。点击“自定义配置…”可以继续修改。"
-                : L"选择“自定义接口”后，点击右侧“自定义配置…”编写 request 和 extractor。");
             break;
+        case aiapi::SiteAdapter::ClaudeOfficial:
+        case aiapi::SiteAdapter::CodexOfficial:
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"服务地址（本机凭据）");
+            break;
+        case aiapi::SiteAdapter::ZhipuPlan:
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"智谱站点地址");
+            break;
+        case aiapi::SiteAdapter::ZenMuxPlan:
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"ZenMux Base URL");
+            break;
+        case aiapi::SiteAdapter::CommandCodePlan:
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"Command Code 地址");
+            break;
+        default:
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL_LABEL, L"服务地址（固定）");
+            break;
+        }
+
+        const std::wstring providerName = preset->shortName ? preset->shortName : L"";
+        switch (preset->category) {
+        case aiapi::ProviderCategory::OfficialBalance:
+            SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                ? (L"已保存 API Key。后台查询" + providerName + L"的官方账户余额。").c_str()
+                : (L"填写" + providerName + L"的 API Key 后开始查询官方账户余额。").c_str());
+            break;
+        case aiapi::ProviderCategory::OfficialPlan:
+            SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                ? (L"已保存 API Key。后台查询" + providerName + L"套餐的剩余额度（多个时间窗口）。").c_str()
+                : (L"填写" + providerName + L"的 API Key 后查询编程套餐额度。").c_str());
+            break;
+        case aiapi::ProviderCategory::OfficialSubscription:
+            SetDlgItemTextW(window, IDC_STATUS,
+                (L"使用本机 " + std::wstring(preset->subscriptionCli ? preset->subscriptionCli : L"CLI") +
+                    L" 已登录的 OAuth 凭据，无需填写 API Key；在对应 CLI 登录后自动生效。").c_str());
+            break;
+        case aiapi::ProviderCategory::Relay:
+        default:
+            switch (adapter) {
+            case aiapi::SiteAdapter::AIAPI:
+                SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                    ? L"已保存 AIAPI 凭据。后台按 /v1/usage 查询剩余额度，自动识别钱包余额、套餐或限额类别。"
+                    : L"填写 AIAPI API Key（或本机签发的站点会话凭据）后，插件才会开始查询余额。");
+                break;
+            case aiapi::SiteAdapter::NewAPI:
+                SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                    ? L"已保存 System Access Token。User ID 必须是数字；额度按 CC-Switch 模板的 500000 单位换算。"
+                    : L"填写 New API Base URL、System Access Token 和数字 User ID，按用户账户 quota 查询。");
+                break;
+            case aiapi::SiteAdapter::Sub2API:
+                SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                    ? L"已保存 Sub2API API Key。请求为 GET <Base URL>/v1/usage；凭据留空表示保留已保存的值。"
+                    : L"填写 Sub2API 站点根 URL 和 API Key；Base URL 可带或不带 /v1，无需 User ID。");
+                break;
+            case aiapi::SiteAdapter::Custom:
+                SetDlgItemTextW(window, IDC_STATUS, hasCustomScript
+                    ? L"已配置自定义 request / extractor。点击“自定义配置…”可以继续修改。"
+                    : L"选择“自定义接口”后，点击右侧“自定义配置…”编写 request 和 extractor。");
+                break;
+            default:
+                break;
+            }
+            break;
+        }
+        if (adapter == aiapi::SiteAdapter::ZhipuPlan) {
+            wchar_t buffer[512]{};
+            GetDlgItemTextW(window, IDC_STATUS, buffer, static_cast<int>(std::size(buffer)));
+            std::wstring hint = buffer;
+            hint += L"（地址可用 open.bigmodel.cn 或 api.z.ai）";
+            SetDlgItemTextW(window, IDC_STATUS, hint.c_str());
         }
     }
 
@@ -623,15 +681,22 @@ private:
             return;
         }
         const auto& site = context->sites[static_cast<size_t>(context->selectedIndex)];
+        const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
         SetDetailEnabled(window, true);
         SetDlgItemTextW(window, IDC_SITE_NAME, site.name.c_str());
-        SetDlgItemTextW(window, IDC_SITE_BASE_URL, site.baseUrl.c_str());
+        std::wstring baseUrl = site.baseUrl;
+        if (baseUrl.empty() && preset && preset->baseUrlMode == aiapi::FieldMode::Editable &&
+            preset->defaultBaseUrl) {
+            baseUrl = preset->defaultBaseUrl;
+        }
+        SetDlgItemTextW(window, IDC_SITE_BASE_URL, baseUrl.c_str());
         SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
         SetDlgItemTextW(window, IDC_SITE_USER_ID, site.userId.c_str());
         SetEditCue(window, IDC_SITE_NAME, L"例如：AIAPI 主账号");
         SetEditCue(window, IDC_SITE_BASE_URL, L"https://");
         SetEditCue(window, IDC_SITE_CREDENTIAL,
-            site.credential.empty() ? L"粘贴 API Key / Token" : L"已保存，留空表示不修改");
+            preset && !preset->needsCredential ? L"" :
+            (site.credential.empty() ? L"粘贴 API Key / Token" : L"已保存，留空表示不修改"));
         SetEditCue(window, IDC_SITE_USER_ID, L"数字 User ID");
         SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, AdapterComboIndex(site.adapter), 0);
         SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, site.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -692,7 +757,22 @@ private:
         site.baseUrl = std::move(baseUrl);
         site.userId = std::move(userId);
         site.adapter = AdapterFromCombo(static_cast<int>(SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_GETCURSEL, 0, 0)));
-        if (site.adapter == aiapi::SiteAdapter::AIAPI) site.baseUrl = L"{AIAPI 站点}";
+        const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
+        if (preset) {
+            switch (preset->baseUrlMode) {
+            case aiapi::FieldMode::Fixed:
+                site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                break;
+            case aiapi::FieldMode::Hidden:
+                site.baseUrl.clear();
+                break;
+            case aiapi::FieldMode::Editable:
+                if (site.baseUrl.empty() && preset->defaultBaseUrl && *preset->defaultBaseUrl) {
+                    site.baseUrl = preset->defaultBaseUrl;
+                }
+                break;
+            }
+        }
         site.enabled = SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (!enteredCredential.empty()) {
             ClearProfile(site);
@@ -712,41 +792,120 @@ private:
             if (site.id == 0 || site.name.empty()) return fail(L"请填写站点显示名称。");
             if (site.name.size() > kMaxSiteNameChars) return fail(L"站点名称过长。");
             if (site.customScript.size() > kMaxCustomScriptChars) return fail(L"自定义提取器脚本超过 16 KiB 限制。");
-            if (site.adapter != aiapi::SiteAdapter::AIAPI && site.adapter != aiapi::SiteAdapter::NewAPI &&
-                site.adapter != aiapi::SiteAdapter::Sub2API && site.adapter != aiapi::SiteAdapter::Custom) {
-                return fail(L"未知接口类型。");
-            }
+            const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
+            if (!preset) return fail(L"未知接口类型。");
+            const std::wstring providerName = preset->shortName ? preset->shortName : L"站点";
+
             if (site.adapter == aiapi::SiteAdapter::AIAPI && !IsAIAPIBaseUrl(site.baseUrl)) {
                 return fail(L"AIAPI 是专用站点适配器，只能访问 {AIAPI 站点}。");
             }
-            if (!site.baseUrl.empty() && !IsValidBaseUrl(site.baseUrl)) return fail(L"站点 Base URL 无效，请填写 HTTP(S) 地址。");
-            if (!site.credential.empty() && !IsValidCredential(site.credential)) return fail(L"凭据格式无效或长度超过限制。");
+            if (!site.baseUrl.empty() && !IsValidBaseUrl(site.baseUrl)) {
+                return fail(L"站点 Base URL 无效，请填写 HTTP(S) 地址。");
+            }
+            if (!site.credential.empty() && !IsValidCredential(site.credential)) {
+                return fail(L"凭据格式无效或长度超过限制。");
+            }
+
             if (site.enabled) {
                 if (site.adapter == aiapi::SiteAdapter::Custom) {
                     if (site.customScript.empty()) return fail(L"已启用的自定义站点需要先配置 extractor 脚本。");
-                } else {
-                    if (site.baseUrl.empty()) {
-                        return fail(site.adapter == aiapi::SiteAdapter::Sub2API
-                            ? L"Sub2API 必须填写站点根 URL。"
-                            : L"已启用的站点必须填写 Base URL。");
-                    }
+                } else if (preset->needsCredential) {
                     if (site.credential.empty()) {
-                        if (site.adapter == aiapi::SiteAdapter::Sub2API) return fail(L"Sub2API 必须填写 API Key（Bearer）。");
-                        if (site.adapter == aiapi::SiteAdapter::NewAPI) return fail(L"New API 必须填写 System Access Token。");
-                        return fail(L"AIAPI 必须填写 API Key 或站点会话凭据。");
+                        return fail(providerName + L" 需要填写 API Key。");
                     }
-                    if (site.adapter == aiapi::SiteAdapter::NewAPI && !IsNumericId(site.userId)) {
-                        return fail(L"New API User ID 必须为数字。");
+                    if (site.adapter == aiapi::SiteAdapter::NewAPI) {
+                        if (site.baseUrl.empty()) return fail(L"New API 必须填写 Base URL。");
+                        if (!IsNumericId(site.userId)) return fail(L"New API User ID 必须为数字。");
+                    }
+                    if (site.adapter == aiapi::SiteAdapter::Sub2API && site.baseUrl.empty()) {
+                        return fail(L"Sub2API 必须填写站点根 URL。");
+                    }
+                    if (site.adapter == aiapi::SiteAdapter::AIAPI && site.baseUrl.empty()) {
+                        return fail(L"AIAPI 站点地址无效。");
                     }
                 }
+                // 官方订阅（usesLocalCredentials）无需地址和凭据，由适配器读取本机 CLI 凭据。
             }
             for (size_t j = 0; j < i; ++j) if (sites[j].id == site.id) return fail(L"站点内部 ID 重复，请重新新增该站点。");
         }
         return true;
     }
 
-    static std::wstring DefaultCustomScript() {
-        return LR"CC(({
+    // 自定义接口的预设模板（对应 CC-Switch 用量查询里的“通用 / New API / Sub2API”模板）。
+    // 索引 0-2 是可载入的模板，索引 3 表示保留用户当前脚本。
+    static constexpr int kCustomTemplateGeneric = 0;
+    static constexpr int kCustomTemplateNewApi = 1;
+    static constexpr int kCustomTemplateSub2Api = 2;
+    static constexpr int kCustomTemplateKeep = 3;
+
+    static const wchar_t* CustomTemplateName(int index) {
+        switch (index) {
+        case kCustomTemplateGeneric: return L"通用模板";
+        case kCustomTemplateNewApi: return L"New API 模板";
+        case kCustomTemplateSub2Api: return L"Sub2API 模板";
+        default: return L"自定义脚本";
+        }
+    }
+
+    static std::wstring CustomTemplateScript(int index) {
+        switch (index) {
+        case kCustomTemplateNewApi:
+            return LR"CC(({
+  request: {
+    url: "{{baseUrl}}/api/user/self",
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{accessToken}}",
+      "New-Api-User": "{{userId}}"
+    }
+  },
+  extractor: function (response) {
+    if (response.success && response.data) {
+      return {
+        planName: response.data.group || "默认套餐",
+        remaining: response.data.quota / 500000,
+        used: response.data.used_quota / 500000,
+        total: (response.data.quota + response.data.used_quota) / 500000,
+        unit: "USD"
+      };
+    }
+    return { isValid: false, invalidMessage: response.message || "查询失败" };
+  }
+}))CC";
+        case kCustomTemplateSub2Api:
+            return LR"CC(({
+  request: {
+    url: "{{baseUrl}}".replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1/usage",
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer {{apiKey}}",
+      "User-Agent": "cc-switch/1.0"
+    }
+  },
+  extractor: function (response) {
+    var quota = response.quota || {};
+    var result = {
+      isValid: response.isValid !== false,
+      unit: response.unit || quota.unit || "USD"
+    };
+    if (typeof response.planName === "string") result.planName = response.planName;
+    if (typeof response.remaining === "number" && response.remaining >= 0) {
+      result.remaining = response.remaining;
+    }
+    if (quota.limit > 0) {
+      result.used = quota.used;
+      result.total = quota.limit;
+    }
+    if (!result.isValid) {
+      result.invalidMessage = response.status ? String(response.status) : "查询失败";
+    }
+    return result;
+  }
+}))CC";
+        case kCustomTemplateGeneric:
+        default:
+            return LR"CC(({
   request: {
     url: "{{baseUrl}}/user/balance",
     method: "GET",
@@ -763,6 +922,11 @@ private:
     };
   }
 }))CC";
+        }
+    }
+
+    static std::wstring DefaultCustomScript() {
+        return CustomTemplateScript(kCustomTemplateGeneric);
     }
 
     static INT_PTR CALLBACK CustomConfigDialogProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -778,6 +942,20 @@ private:
             SetDlgItemTextW(window, IDC_CUSTOM_SCRIPT, script.c_str());
             SendDlgItemMessageW(window, IDC_CUSTOM_SCRIPT, EM_LIMITTEXT,
                 static_cast<WPARAM>(kMaxCustomScriptChars), 0);
+            // 预设模板下拉：打开时按当前脚本内容回显，改动即载入对应模板。
+            for (int i = 0; i <= kCustomTemplateKeep; ++i) {
+                SendDlgItemMessageW(window, IDC_CUSTOM_TEMPLATE, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(CustomTemplateName(i)));
+            }
+            int matchedTemplate = kCustomTemplateKeep;
+            for (int i = 0; i < kCustomTemplateKeep; ++i) {
+                if (script == WithWindowsLineEndings(CustomTemplateScript(i))) {
+                    matchedTemplate = i;
+                    break;
+                }
+            }
+            SendDlgItemMessageW(window, IDC_CUSTOM_TEMPLATE, CB_SETCURSEL,
+                static_cast<WPARAM>(matchedTemplate), 0);
             SetDlgItemTextW(window, IDC_CUSTOM_STATUS,
                 L"请求只允许 HTTPS GET/POST，自动禁用 Cookie 与重定向；脚本不能访问文件、进程或网络对象。");
             // 脚本编辑区用等宽字体；高度沿用对话框字体，DPI 缩放交给系统。
@@ -822,6 +1000,21 @@ private:
 
         if (message != WM_COMMAND || !context) return FALSE;
         switch (LOWORD(wParam)) {
+        case IDC_CUSTOM_TEMPLATE:
+            if (HIWORD(wParam) != CBN_SELCHANGE) return FALSE;
+            {
+                const int index = static_cast<int>(
+                    SendDlgItemMessageW(window, IDC_CUSTOM_TEMPLATE, CB_GETCURSEL, 0, 0));
+                if (index < 0 || index >= kCustomTemplateKeep) return TRUE;
+                if (MessageBoxW(window, L"载入选中的模板会覆盖当前脚本内容，继续？",
+                    L"预设模板", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                    return TRUE;
+                }
+                const std::wstring templateScript = WithWindowsLineEndings(CustomTemplateScript(index));
+                SetDlgItemTextW(window, IDC_CUSTOM_SCRIPT, templateScript.c_str());
+                SendDlgItemMessageW(window, IDC_CUSTOM_SCRIPT, EM_SETSEL, 0, 0);
+            }
+            return TRUE;
         case IDOK: {
             std::wstring script;
             if (!ReadText(window, IDC_CUSTOM_SCRIPT, kMaxCustomScriptChars, script) || script.empty()) {
@@ -851,7 +1044,9 @@ private:
             UpdateWindow(window);
             const aiapi::SiteBalance result = aiapi::FetchSiteBalance(draft);
             const std::wstring resultMessage = result.success
-                ? L"查询成功：" + FormatMoney(result.remaining, result.unit) +
+                ? L"查询成功：" + (result.packageSummary.empty()
+                    ? FormatMoney(result.remaining, result.unit)
+                    : result.packageSummary) +
                     (result.detail.empty() ? L"" : L"\r\n" + result.detail)
                 : (result.error.empty() ? L"查询失败。" : result.error);
             SetDlgItemTextW(window, IDC_CUSTOM_STATUS, resultMessage.c_str());
@@ -880,9 +1075,11 @@ private:
             InitCommonControlsEx(&commonControls);
             CenterDialog(window);
 
-            for (const wchar_t* type : { L"AIAPI（AIAPI 站点）", L"New API", L"Sub2API", L"自定义接口" }) {
+            for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
+                const auto* preset = aiapi::ProviderPresetAt(i);
+                if (!preset || !preset->displayName) continue;
                 SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0,
-                    reinterpret_cast<LPARAM>(type));
+                    reinterpret_cast<LPARAM>(preset->displayName));
             }
             SendDlgItemMessageW(window, IDC_SITE_NAME, EM_LIMITTEXT,
                 static_cast<WPARAM>(kMaxSiteNameChars), 0);
@@ -949,12 +1146,20 @@ private:
                         SecureZeroMemory(site.credential.data(), site.credential.size() * sizeof(wchar_t));
                     }
                     site.credential.clear();
-                    if (previousAdapter == aiapi::SiteAdapter::AIAPI && selectedAdapter != aiapi::SiteAdapter::AIAPI &&
-                        site.baseUrl == L"{AIAPI 站点}") {
-                        site.baseUrl.clear();
-                    }
-                    if (previousAdapter == aiapi::SiteAdapter::NewAPI && selectedAdapter != aiapi::SiteAdapter::NewAPI) {
-                        site.userId.clear();
+                    site.userId.clear();
+                    const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(selectedAdapter);
+                    if (preset) {
+                        switch (preset->baseUrlMode) {
+                        case aiapi::FieldMode::Fixed:
+                            site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                            break;
+                        case aiapi::FieldMode::Hidden:
+                            site.baseUrl.clear();
+                            break;
+                        case aiapi::FieldMode::Editable:
+                            site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                            break;
+                        }
                     }
                 }
                 UpdateSiteList(window, context);
@@ -1074,9 +1279,26 @@ private:
                 SiteValue value;
                 value.id = profile->id;
                 value.adapter = profile->adapter;
-                value.accountBalance = profile->adapter == aiapi::SiteAdapter::AIAPI ||
-                    profile->adapter == aiapi::SiteAdapter::NewAPI;
-                value.itemName = profile->name + (value.accountBalance ? L" 余额" : L" 可用额");
+                const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(profile->adapter);
+                if (preset) {
+                    switch (preset->category) {
+                    case aiapi::ProviderCategory::OfficialBalance:
+                        value.accountBalance = true;
+                        value.label = L"余额";
+                        break;
+                    case aiapi::ProviderCategory::OfficialPlan:
+                    case aiapi::ProviderCategory::OfficialSubscription:
+                        value.label = L"套餐";
+                        break;
+                    default:
+                        value.accountBalance = profile->adapter == aiapi::SiteAdapter::AIAPI ||
+                            profile->adapter == aiapi::SiteAdapter::NewAPI;
+                        break;
+                    }
+                }
+                const std::wstring category = !value.label.empty() ? value.label
+                    : (value.accountBalance ? L"余额" : L"可用额");
+                value.itemName = profile->name + L" " + category;
                 value.itemId = MakeItemId(profile->id);
                 snapshot->sites.push_back(std::move(value));
             }
@@ -1129,8 +1351,14 @@ private:
             // skipped：这一轮还没到重试时间，沿用旧值且不当作错误。
             if (result.success) {
                 value.success = true;
-                value.value = FormatCompactMoney(result.remaining, result.unit);
-                value.fullValue = FormatMoney(result.remaining, result.unit);
+                if (!result.packageSummary.empty()) {
+                    // 套餐类（Token Plan / 官方订阅）没有金额语义，显示百分比摘要。
+                    value.value = result.packageSummary;
+                    value.fullValue = result.packageSummary;
+                } else {
+                    value.value = FormatCompactMoney(result.remaining, result.unit);
+                    value.fullValue = FormatMoney(result.remaining, result.unit);
+                }
                 anySuccess = true;
             } else if (result.skipped) {
                 anySkipped = true;
@@ -1644,8 +1872,14 @@ const wchar_t* PluginItem::GetItemValueText() const {
 }
 
 const wchar_t* PluginItem::GetItemValueSampleText() const {
-    // 宿主用这串字符的宽度决定显示区域大小。显示值恒为金额（见 PublishBalances），
-    // 按最常见的形态给：货币前缀（¥ 最窄、USD 最宽）+ 两位小数 + K/M 后缀。
+    // 宿主用这串字符的宽度决定显示区域大小。金额类给货币前缀 + 两位小数 + K/M；
+    // 套餐类（packageSummary 含百分比）给常见的窗口摘要形态。
+    thread_local std::shared_ptr<const Snapshot> held;
+    held = owner_->GetSnapshot();
+    if (held && itemIndex_ >= 0 && itemIndex_ < static_cast<int>(held->sites.size()) &&
+        !held->sites[static_cast<size_t>(itemIndex_)].packageSummary.empty()) {
+        return L"5H 99%  7D 99%";
+    }
     return L"USD 999.99M";
 }
 

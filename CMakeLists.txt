@@ -4,6 +4,10 @@ project(TrafficMonitorAIAPIQuota LANGUAGES CXX RC)
 add_library(AIAPIQuota SHARED
     src/Plugin.cpp
     src/UsageApi.cpp
+    src/QuerySupport.cpp
+    src/OfficialBalance.cpp
+    src/OfficialPlan.cpp
+    src/OfficialSubscription.cpp
     resources/options.rc
 )
 

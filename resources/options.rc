@@ -73,7 +73,10 @@ BEGIN
                     IDC_CUSTOM_HELP, 7, 7, 382, 8, SS_NOPREFIX
     LTEXT           "可用占位符：{{baseUrl}}、{{apiKey}}、{{accessToken}}、{{userId}}。",
                     IDC_CUSTOM_HELP2, 7, 18, 382, 8, SS_NOPREFIX
-    EDITTEXT        IDC_CUSTOM_SCRIPT, 7, 31, 382, 193,
+    LTEXT           "预设模板", IDC_LABEL_CUSTOM_TEMPLATE, 7, 31, 44, 8
+    COMBOBOX        IDC_CUSTOM_TEMPLATE, 53, 29, 130, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_CUSTOM_SCRIPT, 7, 44, 382, 180,
                     ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_WANTRETURN |
                     WS_VSCROLL | WS_HSCROLL | WS_TABSTOP | WS_BORDER
     LTEXT           "JavaScript 运行在隔离引擎中（16 MiB 内存 / 5 秒超时），无文件、进程或网络对象。测试会发送真实请求，POST 可能修改远端数据。",

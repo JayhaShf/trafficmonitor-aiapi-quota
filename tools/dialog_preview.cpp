@@ -461,7 +461,15 @@ int wmain(int argc, wchar_t** argv) {
             SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(1002, BN_CLICKED),
                 reinterpret_cast<LPARAM>(addButton));
             Sleep(250);
-            SendMessageW(combo, CB_SETCURSEL, 3, 0);
+            // 接口类型下拉按服务商预设排列，“自定义接口”是最后一项；
+            // 用文本查找，避免以后新增预设后写死索引失效。
+            int customIndex = static_cast<int>(
+                SendMessageW(combo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                    reinterpret_cast<LPARAM>(L"自定义接口")));
+            if (customIndex < 0) {
+                customIndex = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0)) - 1;
+            }
+            SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(customIndex), 0);
             SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(1004, CBN_SELCHANGE),
                 reinterpret_cast<LPARAM>(combo));
             Sleep(250);

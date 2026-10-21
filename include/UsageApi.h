@@ -5,12 +5,36 @@
 
 namespace aiapi {
 
-enum class SiteAdapter : unsigned int {
+// 站点适配器（服务商预设）。数值写进 sites.bin 的 adapter 字段：
+// 1-4 是旧版本已有取值，必须保持不变以兼容旧配置；新增服务商只追加在末尾。
+enum class SiteProvider : unsigned int {
+    // 中转站 / 自定义
     AIAPI = 1,
     NewAPI = 2,
     Sub2API = 3,
     Custom = 4,
+    // 官方余额（API Key，对应 CC-Switch 的 balance 服务）
+    DeepSeek = 5,
+    StepFun = 6,
+    SiliconFlowCN = 7,
+    SiliconFlowEN = 8,
+    OpenRouter = 9,
+    NovitaAI = 10,
+    // 官方 Token Plan（编程套餐，对应 CC-Switch 的 coding_plan 服务）
+    KimiPlan = 11,
+    ZhipuPlan = 12,
+    MiniMaxPlanCN = 13,
+    MiniMaxPlanEN = 14,
+    ZenMuxPlan = 15,
+    OpenCodeGoPlan = 16,
+    CommandCodePlan = 17,
+    // 官方订阅（读取本机 CLI 的 OAuth 凭据，对应 CC-Switch 的 subscription 服务）
+    ClaudeOfficial = 18,
+    CodexOfficial = 19,
 };
+
+// 旧代码里的名字，保持兼容。
+using SiteAdapter = SiteProvider;
 
 struct SiteProfile {
     unsigned int id = 0;
