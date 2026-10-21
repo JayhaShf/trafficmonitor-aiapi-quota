@@ -8,7 +8,7 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点，内置 19 个服�
 
 ### 中转站与自定义
 
-- **AIAPI**（`AIAPI 站点`）：固定域名的专用适配器，列在中转站与自定义分类里，地址不可编辑。
+- **AIAPI**：固定域名的专用适配器，列在中转站与自定义分类里，地址不可编辑（源码里不写明文域名，由 `ProviderRegistry.h` 在运行期还原）。
 
   ```
   GET {AIAPI 站点}/v1/usage
@@ -16,7 +16,7 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点，内置 19 个服�
   Accept: application/json
   ```
 
-  **余额**取 `data.available.amount`，币种取 `data.currency`（缺省 CNY）。`data.available.limitedBy` 说明额度口径，决定“已用/总额”读哪个窗口：`balance`、`key_five_hour`、`key_daily`、`key_weekly`、`key_monthly`、`key_total`、`subscription`；该字段为 `null`（线上钱包口径的实际取值）时按钱包余额处理。`available.amount` 缺失时退回对应窗口的 `remaining`。站点会话凭据（`site-session=` 或 `sts_` 开头）走另一条路径，查询官网账户资产接口取钱包余额。
+  **余额**取 `data.available.amount`，币种取 `data.currency`（缺省 CNY）。`data.available.limitedBy` 说明额度口径，决定“已用/总额”读哪个窗口：`balance`、`key_five_hour`、`key_daily`、`key_weekly`、`key_monthly`、`key_total`、`subscription`；该字段为 `null`（线上钱包口径的实际取值）时按钱包余额处理。`available.amount` 缺失时退回对应窗口的 `remaining`。站点会话凭据（`site-session=` 或 `sts_` 开头）走另一条路径，查询站点账户资产接口取钱包余额。
 
 - **New API**：按 CC-Switch 模板 `GET /api/user/self`，使用 `Authorization: Bearer <System Access Token>`、`New-Api-User: <User ID>`、`User-Agent: cc-switch/1.0` 和 `Content-Type: application/json`。`quota` 与 `used_quota` 按模板假设的 `500000` 单位换算成 USD；`group` 作为套餐名。
 - **Sub2API**：按 CC-Switch 模板 `GET /v1/usage`，使用 Bearer API Key 与 `User-Agent: cc-switch/1.0`。`remaining` 可能代表钱包、订阅组或单 Key 限额；只有明确的“钱包余额”分支才标作账户余额，其他显示为可用额。
@@ -26,10 +26,10 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点，内置 19 个服�
 
 | 服务商 | 接口 | 说明 |
 |---|---|---|
-| DeepSeek | `GET https://api.deepseek.com/user/balance` | 支持 CNY/USD 多钱包，优先显示非零钱包，其余钱包与赠金写进 tooltip |
-| StepFun | `GET https://api.stepfun.com/v1/accounts` | 余额（CNY），现金/赠金写进 tooltip |
-| SiliconFlow（国内/国际） | `GET https://api.siliconflow.cn|.com/v1/user/info` | `totalBalance` 为剩余，充值/赠送写进 tooltip |
-| OpenRouter | `GET https://openrouter.ai/api/v1/credits` | 剩余 = 总额度 − 已用，显示已用/总额 |
+| DeepSeek | `GET https://api.deepseek.com/user/balance` | 支持 CNY/USD 多钱包，优先显示非零钱包 |
+| StepFun | `GET https://api.stepfun.com/v1/accounts` | 余额（CNY） |
+| SiliconFlow（国内/国际） | `GET https://api.siliconflow.cn|.com/v1/user/info` | `totalBalance` 为剩余 |
+| OpenRouter | `GET https://openrouter.ai/api/v1/credits` | 剩余 = 总额度 − 已用 |
 | Novita AI | `GET https://api.novita.ai/v3/user/balance` | `availableBalance` / 10000 为 USD 余额 |
 
 ### 官方 Token Plan（API Key）
@@ -74,7 +74,7 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点，内置 19 个服�
 
 ## 凭据安全
 
-API Key、System Access Token、自定义脚本和站点信息统一使用 DPAPI 加密写入 `sites.bin`。AIAPI 会话凭据仅在本机配置，且只通过 HTTPS 发送到 `AIAPI 站点`。官方订阅不保存任何凭据，只读取 `%USERPROFILE%\.claude\.credentials.json` 与 `%USERPROFILE%\.codex\auth.json` 里的本机 OAuth token。不要把 Cookie、Access Token 或 API Key 发到聊天或截图；曾经公开的会话 Cookie 应先撤销。自定义请求必须使用 HTTPS，以免在网络中泄露凭据。
+API Key、System Access Token、自定义脚本和站点信息统一使用 DPAPI 加密写入 `sites.bin`。AIAPI 会话凭据仅在本机配置，且只会通过 HTTPS 发送到 AIAPI 站点。官方订阅不保存任何凭据，只读取 `%USERPROFILE%\.claude\.credentials.json` 与 `%USERPROFILE%\.codex\auth.json` 里的本机 OAuth token。不要把 Cookie、Access Token 或 API Key 发到聊天或截图；曾经公开的会话 Cookie 应先撤销。自定义请求必须使用 HTTPS，以免在网络中泄露凭据。
 
 ## 构建和安装
 

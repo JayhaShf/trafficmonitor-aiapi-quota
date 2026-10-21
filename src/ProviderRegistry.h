@@ -8,7 +8,35 @@
 
 #include "UsageApi.h"
 
+#include <string>
+
 namespace aiapi {
+
+namespace detail {
+
+// AIAPI 的站点域名不在仓库里以明文出现：按字节保存，运行时还原。
+// 这里只做“不显眼”处理，不是加密；目的是避免地址随公开源码扩散。
+inline std::wstring DecodeAiapiHost() {
+    static const unsigned char kEncoded[] = {
+        0x39, 0x34, 0x74, 0x3B, 0x33, 0x3B, 0x2A, 0x33, 0x74, 0x38, 0x35, 0x2E
+    };
+    std::wstring host;
+    host.reserve(sizeof(kEncoded) / sizeof(kEncoded[0]));
+    for (unsigned char value : kEncoded) host.push_back(static_cast<wchar_t>(value ^ 0x5A));
+    return host;
+}
+
+} // namespace detail
+
+// AIAPI 专用站点的域名与根地址（运行期还原，源码里没有明文）。
+inline const std::wstring& AIAPIHost() {
+    static const std::wstring host = detail::DecodeAiapiHost();
+    return host;
+}
+
+inline std::wstring AIAPIBaseUrl() {
+    return L"https://" + AIAPIHost();
+}
 
 enum class ProviderCategory {
     Relay,                // 中转站与自定义：New API / Sub2API / AIAPI / 自定义接口
@@ -39,8 +67,9 @@ struct ProviderPreset {
 };
 
 inline const ProviderPreset kProviderPresets[] = {
-    { SiteProvider::AIAPI, ProviderCategory::Relay, L"AIAPI（AIAPI 站点）", L"AIAPI",
-        L"{AIAPI 站点}", FieldMode::Fixed, true, L"API Key / 站点会话" },
+    // AIAPI 的地址在运行期由 AIAPIBaseUrl() 还原，源码里不写明文域名。
+    { SiteProvider::AIAPI, ProviderCategory::Relay, L"AIAPI", L"AIAPI",
+        L"", FieldMode::Fixed, true, L"API Key / 站点会话" },
     { SiteProvider::NewAPI, ProviderCategory::Relay, L"New API", L"New API",
         L"", FieldMode::Editable, true, L"System Access Token", true },
     { SiteProvider::Sub2API, ProviderCategory::Relay, L"Sub2API", L"Sub2API",
@@ -95,6 +124,17 @@ inline const ProviderPreset* FindProviderPreset(SiteProvider provider) {
         if (preset.provider == provider) return &preset;
     }
     return nullptr;
+}
+
+// 预设的默认地址：AIAPI 的地址不在源码里写死，由 AIAPIBaseUrl() 运行期还原。
+inline std::wstring PresetBaseUrl(const ProviderPreset& preset) {
+    if (preset.defaultBaseUrl && *preset.defaultBaseUrl) return preset.defaultBaseUrl;
+    if (preset.provider == SiteProvider::AIAPI) return AIAPIBaseUrl();
+    return std::wstring();
+}
+
+inline bool IsAiapiProvider(SiteProvider provider) {
+    return provider == SiteProvider::AIAPI;
 }
 
 inline bool IsRelayProvider(SiteProvider provider) {

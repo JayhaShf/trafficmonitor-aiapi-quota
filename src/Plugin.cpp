@@ -108,7 +108,7 @@ bool IsAIAPIBaseUrl(const std::wstring& value) {
     if (components.nScheme != INTERNET_SCHEME_HTTPS || components.dwUserNameLength != 0 ||
         components.dwPasswordLength != 0 || components.dwExtraInfoLength != 0 ||
         CompareStringOrdinal(components.lpszHostName, static_cast<int>(components.dwHostNameLength),
-            L"AIAPI 站点", -1, TRUE) != CSTR_EQUAL) return false;
+            aiapi::AIAPIHost().c_str(), static_cast<int>(aiapi::AIAPIHost().size()), TRUE) != CSTR_EQUAL) return false;
     if (components.dwUrlPathLength == 0) return true;
     return components.dwUrlPathLength == 1 && components.lpszUrlPath[0] == L'/';
 }
@@ -256,8 +256,8 @@ public:
         case TMI_DESCRIPTION: return L"AIAPI/New API/Sub2API 中转站、自定义接口，以及 DeepSeek 等官方余额、Kimi 等 Token Plan、Claude/Codex 官方订阅";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"3.3.0";
-        case TMI_URL: return L"{AIAPI 站点}";
+        case TMI_VERSION: return L"3.4.0";
+        case TMI_URL: return L"https://github.com/JayhaShf/trafficmonitor-aiapi-quota";
         default: return L"";
         }
     }
@@ -536,7 +536,7 @@ private:
             switch (preset->baseUrlMode) {
             case aiapi::FieldMode::Fixed:
             case aiapi::FieldMode::Editable:
-                site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                site.baseUrl = aiapi::PresetBaseUrl(*preset);
                 break;
             case aiapi::FieldMode::Hidden:
                 site.baseUrl.clear();
@@ -646,8 +646,9 @@ private:
             (needsCredential || custom) ? SW_SHOW : SW_HIDE);
 
         // 固定/隐藏地址的显示值统一由预设决定，避免旧配置里的残留值误导。
-        if (preset->baseUrlMode == aiapi::FieldMode::Fixed && preset->defaultBaseUrl) {
-            SetDlgItemTextW(window, IDC_SITE_BASE_URL, preset->defaultBaseUrl);
+        if (preset->baseUrlMode == aiapi::FieldMode::Fixed) {
+            const std::wstring fixedUrl = aiapi::PresetBaseUrl(*preset);
+            SetDlgItemTextW(window, IDC_SITE_BASE_URL, fixedUrl.c_str());
         } else if (preset->baseUrlMode == aiapi::FieldMode::Hidden) {
             SetDlgItemTextW(window, IDC_SITE_BASE_URL, L"（使用本机 CLI 凭据）");
         }
@@ -762,9 +763,8 @@ private:
         SetDetailEnabled(window, true);
         SetDlgItemTextW(window, IDC_SITE_NAME, site.name.c_str());
         std::wstring baseUrl = site.baseUrl;
-        if (baseUrl.empty() && preset && preset->baseUrlMode == aiapi::FieldMode::Editable &&
-            preset->defaultBaseUrl) {
-            baseUrl = preset->defaultBaseUrl;
+        if (baseUrl.empty() && preset && preset->baseUrlMode != aiapi::FieldMode::Hidden) {
+            baseUrl = aiapi::PresetBaseUrl(*preset);
         }
         SetDlgItemTextW(window, IDC_SITE_BASE_URL, baseUrl.c_str());
         SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
@@ -839,17 +839,16 @@ private:
         site.adapter = SelectedProvider(window);
         const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
         if (preset) {
+            const std::wstring presetUrl = aiapi::PresetBaseUrl(*preset);
             switch (preset->baseUrlMode) {
             case aiapi::FieldMode::Fixed:
-                site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                site.baseUrl = presetUrl;
                 break;
             case aiapi::FieldMode::Hidden:
                 site.baseUrl.clear();
                 break;
             case aiapi::FieldMode::Editable:
-                if (site.baseUrl.empty() && preset->defaultBaseUrl && *preset->defaultBaseUrl) {
-                    site.baseUrl = preset->defaultBaseUrl;
-                }
+                if (site.baseUrl.empty() && !presetUrl.empty()) site.baseUrl = presetUrl;
                 break;
             }
         }
@@ -877,7 +876,8 @@ private:
             const std::wstring providerName = preset->shortName ? preset->shortName : L"站点";
 
             if (site.adapter == aiapi::SiteAdapter::AIAPI && !IsAIAPIBaseUrl(site.baseUrl)) {
-                return fail(L"AIAPI 是专用站点适配器，只能访问 {AIAPI 站点}。");            }
+                return fail(L"AIAPI 是专用站点适配器，只能访问其固定站点地址。");
+            }
             if (!site.baseUrl.empty() && !IsValidBaseUrl(site.baseUrl)) {
                 return fail(L"站点 Base URL 无效，请填写 HTTP(S) 地址。");
             }
@@ -1247,7 +1247,7 @@ private:
                 site.id = NewSiteId();
                 site.adapter = aiapi::SiteAdapter::AIAPI;
                 site.name = L"AIAPI " + std::to_wstring(context->sites.size() + 1);
-                site.baseUrl = L"{AIAPI 站点}";
+                site.baseUrl = aiapi::AIAPIBaseUrl();
                 context->sites.push_back(std::move(site));
                 context->selectedIndex = static_cast<int>(context->sites.size()) - 1;
                 UpdateSiteList(window, context);
@@ -1411,7 +1411,8 @@ private:
         Publish(std::move(snapshot));
     }
 
-    void PublishBalances(const std::vector<aiapi::SiteBalance>& results) {        auto previous = GetSnapshot();
+    void PublishBalances(const std::vector<aiapi::SiteBalance>& results) {
+        auto previous = GetSnapshot();
         auto snapshot = std::make_shared<Snapshot>();
         std::wstring tip;
         bool anySuccess = false;
@@ -1689,7 +1690,7 @@ private:
         site.id = NewSiteId();
         site.adapter = aiapi::SiteAdapter::AIAPI;
         site.name = L"AIAPI";
-        site.baseUrl = L"{AIAPI 站点}";
+        site.baseUrl = aiapi::AIAPIBaseUrl();
         site.credential = std::move(key);
         profiles.push_back(std::move(site));
         if (!SaveConfig(profiles, refreshSeconds)) { ClearProfiles(profiles); return false; }

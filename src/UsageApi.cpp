@@ -2,6 +2,7 @@
 #include "OfficialBalance.h"
 #include "OfficialPlan.h"
 #include "OfficialSubscription.h"
+#include "ProviderRegistry.h"
 #include "QuerySupport.h"
 
 #include <windows.h>
@@ -261,7 +262,7 @@ HttpResult GetJson(const std::wstring& url, const std::wstring& credential,
     }
     if (siteSession && (components.nScheme != INTERNET_SCHEME_HTTPS ||
         CompareStringOrdinal(components.lpszHostName, static_cast<int>(components.dwHostNameLength),
-            L"AIAPI 站点", -1, TRUE) != CSTR_EQUAL)) {
+            AIAPIHost().c_str(), static_cast<int>(AIAPIHost().size()), TRUE) != CSTR_EQUAL)) {
         result.error = L"站点会话只允许通过 HTTPS 发送到 AIAPI 站点。";
         return result;
     }
