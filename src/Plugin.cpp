@@ -255,7 +255,7 @@ public:
         case TMI_DESCRIPTION: return L"AIAPI/New API/Sub2API 中转站、自定义接口，以及 DeepSeek 等官方余额、Kimi 等 Token Plan、Claude/Codex 官方订阅";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"3.1.0";
+        case TMI_VERSION: return L"3.2.0";
         case TMI_URL: return L"{AIAPI 站点}";
         default: return L"";
         }
@@ -456,31 +456,36 @@ private:
 
     static int ProviderCategoryIndex(aiapi::ProviderCategory category) {
         switch (category) {
-        case aiapi::ProviderCategory::Relay: return 0;
-        case aiapi::ProviderCategory::OfficialBalance: return 1;
-        case aiapi::ProviderCategory::OfficialPlan: return 2;
-        case aiapi::ProviderCategory::OfficialSubscription: return 3;
+        case aiapi::ProviderCategory::Dedicated: return 0;
+        case aiapi::ProviderCategory::Relay: return 1;
+        case aiapi::ProviderCategory::OfficialBalance: return 2;
+        case aiapi::ProviderCategory::OfficialPlan: return 3;
+        case aiapi::ProviderCategory::OfficialSubscription: return 4;
         }
-        return 0;
+        return 1;
     }
 
     static aiapi::ProviderCategory ProviderCategoryFromIndex(int index) {
         switch (index) {
-        case 1: return aiapi::ProviderCategory::OfficialBalance;
-        case 2: return aiapi::ProviderCategory::OfficialPlan;
-        case 3: return aiapi::ProviderCategory::OfficialSubscription;
+        case 0: return aiapi::ProviderCategory::Dedicated;
+        case 2: return aiapi::ProviderCategory::OfficialBalance;
+        case 3: return aiapi::ProviderCategory::OfficialPlan;
+        case 4: return aiapi::ProviderCategory::OfficialSubscription;
         default: return aiapi::ProviderCategory::Relay;
         }
     }
 
     static const wchar_t* ProviderCategoryName(int index) {
         switch (index) {
-        case 1: return L"官方余额";
-        case 2: return L"Token Plan";
-        case 3: return L"官方订阅";
+        case 0: return L"专用站点";
+        case 2: return L"官方余额";
+        case 3: return L"Token Plan";
+        case 4: return L"官方订阅";
         default: return L"中转站与自定义";
         }
     }
+
+    static constexpr int kProviderCategoryCount = 5;
 
     // 服务商下拉只显示当前分类的预设；selected 不在该分类时选中第一项。
     static void PopulateProviderCombo(HWND window, aiapi::ProviderCategory category,
@@ -686,6 +691,11 @@ private:
 
         const std::wstring providerName = preset->shortName ? preset->shortName : L"";
         switch (preset->category) {
+        case aiapi::ProviderCategory::Dedicated:
+            SetDlgItemTextW(window, IDC_STATUS, hasCredential
+                ? L"已保存 AIAPI Key，后台按专用接口 GET /v1/usage 查询余额。"
+                : L"填写 AIAPI Key 后查询余额（专用站点，地址固定）。");
+            break;
         case aiapi::ProviderCategory::OfficialBalance:
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
                 ? (L"已保存 API Key，后台查询" + providerName + L"官方余额。").c_str()
@@ -704,11 +714,6 @@ private:
         case aiapi::ProviderCategory::Relay:
         default:
             switch (adapter) {
-            case aiapi::SiteAdapter::AIAPI:
-                SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                    ? L"已保存 AIAPI 凭据，后台按 /v1/usage 查询余额。"
-                    : L"填写 AIAPI API Key（或站点会话凭据）后开始查询余额。");
-                break;
             case aiapi::SiteAdapter::NewAPI:
                 SetDlgItemTextW(window, IDC_STATUS, hasCredential
                     ? L"已保存 System Access Token，按用户 quota 查询余额。"
@@ -1152,7 +1157,7 @@ private:
             InitCommonControlsEx(&commonControls);
             CenterDialog(window);
 
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < kProviderCategoryCount; ++i) {
                 SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_ADDSTRING, 0,
                     reinterpret_cast<LPARAM>(ProviderCategoryName(i)));
             }
@@ -1430,6 +1435,7 @@ private:
             // 「名称（套餐）：5H x% 7D x% 1M x%」，不再区分可用额/日限额等说法。
             const std::wstring category = (isPackage || packageProvider) ? L"套餐" : L"余额";
             value.label = category;
+            value.extra = result.extra;
             value.itemName = result.name + L" " + category;
             value.itemId = MakeItemId(result.id);
             value.error = result.error;
@@ -1506,6 +1512,11 @@ private:
                 tip += result.name + L"（" + failCategory + L"）：查询失败" +
                     (result.error.empty() ? L"" : L"：" + result.error);
                 if (oldValue && oldValue->success) tip += L"（上次 " + oldValue->fullValue + L"）";
+            }
+            // 补充信息统一用“；”接在同一行末尾：主行格式对余额/套餐完全一致，
+            // 且与示例“名称（余额）：￥X；补充”保持一致。失败行不再拼接旧补充信息。
+            if (result.success || result.skipped) {
+                if (!value.extra.empty()) tip += L"；" + value.extra;
             }
             snapshot->sites.push_back(std::move(value));
         }

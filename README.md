@@ -6,9 +6,24 @@ TrafficMonitor 原生 C++ 插件，最多管理 8 个站点，内置 19 个服�
 
 站点类型下拉按服务商预设组织；官方服务商的查询逻辑移植自 CC-Switch 的余额 / 套餐 / 订阅三套服务（`services/balance.rs`、`coding_plan.rs`、`subscription.rs`）。
 
+### 专用站点
+
+- **AIAPI**（`AIAPI 站点`）：唯一的“专用站点”预设——固定域名、自家私有接口，既不是 New API 也不是 Sub2API 协议，所以单列一类，地址不可编辑。
+
+  ```
+  GET {AIAPI 站点}/v1/usage
+  Authorization: Bearer <API Key>
+  Accept: application/json
+  ```
+
+  **余额**取 `data.available.amount`，币种取 `data.currency`（缺省 CNY）。`data.available.limitedBy` 说明额度口径，决定“已用/总额”读哪个窗口：`balance`（钱包余额，实际最常用）、`key_five_hour`、`key_daily`、`key_weekly`、`key_monthly`、`key_total`、`subscription`；`available.amount` 缺失时退回对应窗口的 `remaining`。`data.limits.<窗口>.limit > 0` 时 tooltip 显示“已用 x/y”。tooltip 另附 `data.key.name` 与 `data.today.cost` / `data.today.calls`。
+
+  用真实 Key 验证过的响应（钱包口径 `limitedBy: null`）：`available.amount=7.40`、`today.cost=11.57`、`today.calls=1702`，插件显示为 `AIAPI（余额）：¥7.40；Key DeepSeek；今日 11.57 · 1702 次`。
+
+  站点会话凭据（`site-session=` 或 `sts_` 开头）走另一条路径，查询官网账户资产接口取钱包余额。
+
 ### 中转站与自定义
 
-- **AIAPI**：API Key 查询 `GET /v1/usage`（`Authorization: Bearer <API Key>`、`Accept: application/json`）。剩余额度取 `data.available.amount`，缺省时退回 `data.limits.daily.remaining`；币种取 `data.currency`（缺省 CNY）。`data.available.limitedBy` 决定额度类别：`key_daily`/`key_weekly`/`key_monthly`/`key_total` 显示为日限额、周限额、月限额、总限额，`balance` 为钱包余额，`subscription` 为套餐。tooltip 附带 `data.key.name` 与 `data.today.cost/calls`，`data.limits.daily.limit > 0` 时再显示已用/总额。站点会话凭据（`site-session=` 或 `sts_`）则查询官网账户资产接口。
 - **New API**：按 CC-Switch 模板 `GET /api/user/self`，使用 `Authorization: Bearer <System Access Token>`、`New-Api-User: <User ID>`、`User-Agent: cc-switch/1.0` 和 `Content-Type: application/json`。`quota` 与 `used_quota` 按模板假设的 `500000` 单位换算成 USD；`group` 作为套餐名。
 - **Sub2API**：按 CC-Switch 模板 `GET /v1/usage`，使用 Bearer API Key 与 `User-Agent: cc-switch/1.0`。`remaining` 可能代表钱包、订阅组或单 Key 限额；只有明确的“钱包余额”分支才标作账户余额，其他显示为可用额。
 - **自定义接口**：内置「通用 / New API / Sub2API」三种脚本模板（与 CC-Switch 模板一致），也可完全自定义。脚本使用 `{ request, extractor }` 格式，支持占位符 `{{baseUrl}}`、`{{apiKey}}`、`{{accessToken}}`、`{{userId}}`；提取器可返回 `remaining`（必填）、`unit`、`planName`、`used`、`total`、`isValid`、`invalidMessage` 和 `extra`。请求仅允许 HTTPS GET/POST；脚本由 Windows Chakra 引擎隔离执行（16 MiB / 5 秒，无文件、进程或网络对象）。“测试脚本”会发送真实请求，POST 可能修改远端数据。
@@ -88,7 +103,7 @@ cmake --build build-win32 --config Release
 插件对话框沿用 TrafficMonitor 本体的界面语言：9pt 微软雅黑、7 DLU 标准边距、`GROUPBOX` 分组、14 DLU 高按钮与 12 DLU 高输入框，全部使用系统原生控件，不接管绘制。
 
 - **站点列表**：与宿主“插件管理”一致的 `ListView` 报表视图，列出名称、类型、状态三列；选中站点后在右侧编辑。
-- **两级选择**：“分类”先选中转站与自定义 / 官方余额 / Token Plan / 官方订阅，“服务商”只列出该分类下的预设，避免 19 个选项挤在一个长列表里。
+- **两级选择**：“分类”先选专用站点 / 中转站与自定义 / 官方余额 / Token Plan / 官方订阅，“服务商”只列出该分类下的预设，避免 19 个选项挤在一个长列表里。
 - **接口与凭据**：右侧表单按服务商预设动态调整——固定地址只读、可编辑地址预填默认值、官方订阅隐藏地址与凭据（改为“使用本机 CLI 凭据”提示）；New API 才显示 User ID，自定义接口才启用“自定义配置…”。
 - **查询设置**：每站点“启用查询”复选框；底部刷新间隔（数字 + 秒/分钟）与“立即刷新”按钮，页脚说明加密保存位置。
 - **原生主题与 DPI**：不自定义颜色和字体，跟随系统浅色/深色控件主题与高对比度设置；对话框单位与字体由系统按当前 DPI 缩放。
@@ -106,8 +121,8 @@ cl /nologo /std:c++17 /EHsc /utf-8 /DUNICODE /D_UNICODE /I..\include dialog_prev
 # 截图（--samples 会复制宿主真实配置到临时目录，带出真实站点列表）
 .\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\options.png --samples
 .\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\custom.png --custom
-# 指定分类 / 服务商（0 基索引），截不同预设的字段布局
-.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\plan.png --category 2 --provider 0
+# 指定分类 / 服务商（分类：0 专用站点 / 1 中转站 / 2 官方余额 / 3 Token Plan / 4 官方订阅）
+.\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\plan.png --category 3 --provider 0
 # 按秒设置刷新间隔并点“保存并关闭”，验证落盘（写到临时目录，不碰真实配置）
 .\dialog_preview.exe ..\build\Release\AIAPIQuota.dll shots\refresh.png --save-refresh 45
 ```

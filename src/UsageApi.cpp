@@ -440,6 +440,7 @@ bool ParseAIAPI(const std::string& body, SiteBalance& output) {
 // /v1/usage 的 available.limitedBy → 显示类别。CC-Switch 脚本里用完整名称，
 // TrafficMonitor 的显示项目标签要尽量短，所以这里给出短标签。
 std::wstring AIAPIScopeLabel(const std::string& limitedBy) {
+    if (limitedBy == "key_five_hour") return L"5 小时限额";
     if (limitedBy == "key_daily") return L"日限额";
     if (limitedBy == "key_weekly") return L"周限额";
     if (limitedBy == "key_monthly") return L"月限额";
@@ -447,6 +448,16 @@ std::wstring AIAPIScopeLabel(const std::string& limitedBy) {
     if (limitedBy == "balance") return L"余额";
     if (limitedBy == "subscription") return L"套餐";
     return L"";
+}
+
+// limitedBy → limits 里对应的窗口名，用于取该口径的 limit/used。
+const char* AIAPILimitWindow(const std::string& limitedBy) {
+    if (limitedBy == "key_five_hour") return "fiveHour";
+    if (limitedBy == "key_daily") return "daily";
+    if (limitedBy == "key_weekly") return "weekly";
+    if (limitedBy == "key_monthly") return "monthly";
+    if (limitedBy == "key_total") return "total";
+    return "daily";
 }
 
 std::wstring FormatNumber(double value, int precision) {
@@ -487,20 +498,22 @@ bool ParseAIAPIKeyUsage(const std::string& body, SiteBalance& output) {
 
     const JsonValue* available = Member(data, "available");
     const JsonValue* limits = Member(data, "limits");
-    const JsonValue* daily = Member(limits, "daily");
     const JsonValue* today = Member(data, "today");
     const JsonValue* key = Member(data, "key");
 
     std::string limitedBy;
     ReadString(Member(available, "limitedBy"), limitedBy);
     output.scopeLabel = AIAPIScopeLabel(limitedBy);
-    output.accountBalance = limitedBy == "balance";
+    // limitedBy 为 null/缺失（线上钱包口径就是这样）时按钱包余额处理。
+    if (output.scopeLabel.empty()) output.scopeLabel = L"余额";
+    output.accountBalance = limitedBy.empty() || limitedBy == "balance";
 
-    // available.amount 优先（0 也是有效值）；缺省时退回日限额剩余。
+    // available.amount 优先（0 也是有效值）；缺省时退回当前口径窗口的 remaining。
+    const JsonValue* activeWindow = Member(limits, AIAPILimitWindow(limitedBy));
     double remaining = 0.0;
     if (!ReadNumber(Member(available, "amount"), remaining) &&
-        !ReadNumber(Member(daily, "remaining"), remaining)) {
-        output.error = L"AIAPI /v1/usage 响应没有有效的 available.amount 或 limits.daily.remaining。";
+        !ReadNumber(Member(activeWindow, "remaining"), remaining)) {
+        output.error = L"AIAPI /v1/usage 响应没有有效的 available.amount 或限额剩余。";
         return false;
     }
     if (!std::isfinite(remaining) || remaining < 0.0) {
@@ -509,17 +522,17 @@ bool ParseAIAPIKeyUsage(const std::string& body, SiteBalance& output) {
     }
     output.remaining = remaining;
 
-    // 日限额：limit > 0 时记录已用/总额，tooltip 里附“已用 x/y”。
-    double dailyLimit = 0.0;
-    double dailyUsed = 0.0;
-    const bool hasDailyLimit = ReadNumber(Member(daily, "limit"), dailyLimit) &&
-        std::isfinite(dailyLimit) && dailyLimit > 0.0;
-    if (hasDailyLimit) {
+    // 当前口径窗口的 limit > 0 时记录已用/总额，tooltip 里附“已用 x/y”。
+    double windowLimit = 0.0;
+    double windowUsed = 0.0;
+    const bool hasWindowLimit = ReadNumber(Member(activeWindow, "limit"), windowLimit) &&
+        std::isfinite(windowLimit) && windowLimit > 0.0;
+    if (hasWindowLimit) {
         output.hasTotal = true;
-        output.total = dailyLimit;
-        output.hasUsed = ReadNumber(Member(daily, "used"), dailyUsed) &&
-            std::isfinite(dailyUsed) && dailyUsed >= 0.0;
-        if (output.hasUsed) output.used = dailyUsed;
+        output.total = windowLimit;
+        output.hasUsed = ReadNumber(Member(activeWindow, "used"), windowUsed) &&
+            std::isfinite(windowUsed) && windowUsed >= 0.0;
+        if (output.hasUsed) output.used = windowUsed;
     }
 
     // planName/extra：脚本里 planName 含类别，这里类别已单独作为标签，故只保留 Key 名称。
@@ -543,8 +556,11 @@ bool ParseAIAPIKeyUsage(const std::string& body, SiteBalance& output) {
             extra += FormatNumber(calls, 0) + L" 次";
         }
     }
+    if (!limitedBy.empty() && !output.scopeLabel.empty() && limitedBy != "balance") {
+        extra += L"；" + output.scopeLabel;
+    }
     if (output.hasTotal && output.hasUsed) {
-        extra += L"；已用 " + FormatNumber(output.used, 2) + L"/" + FormatNumber(output.total, 2);
+        extra += L"已用 " + FormatNumber(output.used, 2) + L"/" + FormatNumber(output.total, 2);
     }
     output.extra = extra;
     return true;
