@@ -1,0 +1,87 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+            artifact: AIAPIQuota-x64.dll
+          - arch: x86
+            cmake_arch: Win32
+            artifact: AIAPIQuota-x86.dll
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build-${{ matrix.arch }} -A ${{ matrix.cmake_arch }}
+
+      - name: Build
+        run: cmake --build build-${{ matrix.arch }} --config Release
+
+      - name: Collect
+        shell: pwsh
+        run: |
+          $src = "build-${{ matrix.arch }}/Release/AIAPIQuota.dll"
+          if (-not (Test-Path $src)) { throw "缺少构建产物 $src" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $src "dist/${{ matrix.artifact }}"
+          Get-Item "dist/${{ matrix.artifact }}" | Select-Object Name, Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Attach to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten assets
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Recurse -Filter *.dll | ForEach-Object {
+            Move-Item $_.FullName (Join-Path dist $_.Name) -Force
+          }
+          Get-ChildItem dist -Recurse -Directory | Remove-Item -Recurse -Force
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $lines = foreach ($f in Get-ChildItem dist -Filter *.dll | Sort-Object Name) {
+            "{0}  {1}  {2} bytes" -f (Get-FileHash $f.FullName -Algorithm SHA256).Hash, $f.Name, $f.Length
+          }
+          $lines | Set-Content (Join-Path dist 'SHA256SUMS.txt') -Encoding utf8
+          Get-Content (Join-Path dist 'SHA256SUMS.txt')
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release view "${{ github.ref_name }}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "${{ github.ref_name }}" --title "AIAPIQuota ${{ github.ref_name }}" --notes "见 README 与提交记录。"
+          }
+          gh release upload "${{ github.ref_name }}" dist/*.dll dist/SHA256SUMS.txt --clobber

@@ -78,6 +78,20 @@ API Key、System Access Token、自定义脚本和站点信息统一使用 DPAPI
 
 ## 构建和安装
 
+### 直接下载
+
+到 [Releases](https://github.com/JayhaShf/trafficmonitor-aiapi-quota/releases) 下载对应位数的 DLL：
+
+| 文件 | 适用宿主 |
+|---|---|
+| `AIAPIQuota-x64.dll` | 64 位 TrafficMonitor |
+| `AIAPIQuota-x86.dll` | 32 位 TrafficMonitor |
+| `SHA256SUMS.txt` | 校验和 |
+
+退出 TrafficMonitor，把 DLL 改名为 `AIAPIQuota.dll` 放进安装目录的 `plugins` 文件夹，再启动程序。
+
+### 自行编译
+
 需要 Windows 10 或更高版本、Visual Studio 2022 C++ 桌面工具、CMake 和 Windows SDK。在 TrafficMonitor 正常退出后，用与其位数匹配的 DLL：
 
 ```powershell
@@ -90,7 +104,19 @@ cmake -S . -B build-win32 -A Win32
 cmake --build build-win32 --config Release
 ```
 
-将生成的 `AIAPIQuota.dll` 放入安装目录的 `plugins` 文件夹后启动程序。首次增加站点时，在“接口类型”里选择服务商预设：中转站/官方余额/Token Plan 填对应 API Key 即可（地址为固定值时无需修改）；官方订阅无需填 Key，先在 Claude Code / Codex 里登录。然后勾选“启用查询”，并在 TrafficMonitor 的“显示项目”菜单启用该站点余额项目。
+产物在 `build\Release\AIAPIQuota.dll` / `build-win32\Release\AIAPIQuota.dll`。
+
+### 自动发布
+
+`.github/workflows/build.yml` 在每次推送到 `main`、PR 和手动触发时构建 x64 + x86 两个架构并上传为构建产物；推送 `v*` 标签时会自动构建并把两个 DLL 和 `SHA256SUMS.txt` 附加到同名 Release。发版流程：
+
+```powershell
+git tag -a v3.3.0 -m "AIAPIQuota 3.3.0"
+git push origin v3.3.0
+gh release create v3.3.0 --title "AIAPIQuota 3.3.0" --notes-file notes.md
+```
+
+将生成的 `AIAPIQuota.dll` 放入安装目录的 `plugins` 文件夹后启动程序。首次增加站点时，在“服务商”里选择预设：中转站/官方余额/Token Plan 填对应 API Key 即可（地址为固定值时无需修改）；官方订阅无需填 Key，先在 Claude Code / Codex 里登录。然后勾选“启用查询”，并在 TrafficMonitor 的“显示项目”菜单启用该站点余额项目。
 
 ## 界面
 
