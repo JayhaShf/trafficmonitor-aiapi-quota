@@ -11,8 +11,7 @@
 namespace aiapi {
 
 enum class ProviderCategory {
-    Dedicated,            // 专用站点：固定域名 + 自家私有接口（如 AIAPI）
-    Relay,                // 中转站：New API / Sub2API 等通用接口，地址由用户填写
+    Relay,                // 中转站与自定义：New API / Sub2API / AIAPI / 自定义接口
     OfficialBalance,      // 官方余额（API Key）
     OfficialPlan,         // 官方 Token Plan（API Key）
     OfficialSubscription, // 官方订阅（本机 CLI OAuth 凭据）
@@ -40,7 +39,7 @@ struct ProviderPreset {
 };
 
 inline const ProviderPreset kProviderPresets[] = {
-    { SiteProvider::AIAPI, ProviderCategory::Dedicated, L"AIAPI（AIAPI 站点）", L"AIAPI",
+    { SiteProvider::AIAPI, ProviderCategory::Relay, L"AIAPI（AIAPI 站点）", L"AIAPI",
         L"{AIAPI 站点}", FieldMode::Fixed, true, L"API Key / 站点会话" },
     { SiteProvider::NewAPI, ProviderCategory::Relay, L"New API", L"New API",
         L"", FieldMode::Editable, true, L"System Access Token", true },
@@ -99,13 +98,8 @@ inline const ProviderPreset* FindProviderPreset(SiteProvider provider) {
 }
 
 inline bool IsRelayProvider(SiteProvider provider) {
-    return provider == SiteProvider::NewAPI || provider == SiteProvider::Sub2API ||
-        provider == SiteProvider::Custom;
-}
-
-// 专用站点：固定域名、自带私有接口（非 New API / Sub2API 协议），只能选它自己的适配器。
-inline bool IsDedicatedProvider(SiteProvider provider) {
-    return provider == SiteProvider::AIAPI;
+    return provider == SiteProvider::AIAPI || provider == SiteProvider::NewAPI ||
+        provider == SiteProvider::Sub2API || provider == SiteProvider::Custom;
 }
 
 } // namespace aiapi
