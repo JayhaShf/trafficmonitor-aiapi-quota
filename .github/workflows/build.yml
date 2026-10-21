@@ -54,6 +54,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh 需要当前目录是 git 仓库，否则会报 "fatal: not a git repository"。
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -78,10 +81,11 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         shell: pwsh
         run: |
-          gh release view "${{ github.ref_name }}" 2>$null
+          gh release view $env:TAG
           if ($LASTEXITCODE -ne 0) {
-            gh release create "${{ github.ref_name }}" --title "AIAPIQuota ${{ github.ref_name }}" --notes "见 README 与提交记录。"
+            gh release create $env:TAG --title "AIAPIQuota $env:TAG" --notes "见 README 与提交记录。"
           }
-          gh release upload "${{ github.ref_name }}" dist/*.dll dist/SHA256SUMS.txt --clobber
+          gh release upload $env:TAG dist/*.dll dist/SHA256SUMS.txt --clobber
