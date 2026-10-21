@@ -373,14 +373,24 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring output = argv[2];
     bool samples = false;
     bool customDialog = false;
-    int saveRefreshChoice = -1;
+    int saveRefreshSeconds = -1;
+    int pickCategory = -1;
+    int pickProvider = -1;
     for (int i = 3; i < argc; ++i) {
         if (wcscmp(argv[i], L"--samples") == 0) samples = true;
         if (wcscmp(argv[i], L"--custom") == 0) { samples = true; customDialog = true; }
-        if (wcscmp(argv[i], L"--save-refresh") == 0 && i + 1 < argc) {
-            // 选中指定的刷新间隔并点“保存并关闭”，用来验证落盘。
+        if (wcscmp(argv[i], L"--category") == 0 && i + 1 < argc) {
             samples = true;
-            saveRefreshChoice = _wtoi(argv[++i]);
+            pickCategory = _wtoi(argv[++i]);
+        }
+        if (wcscmp(argv[i], L"--provider") == 0 && i + 1 < argc) {
+            samples = true;
+            pickProvider = _wtoi(argv[++i]);
+        }
+        if (wcscmp(argv[i], L"--save-refresh") == 0 && i + 1 < argc) {
+            // 按秒设置刷新间隔（数字 + 秒/分钟单位）并点“保存并关闭”，验证落盘。
+            samples = true;
+            saveRefreshSeconds = _wtoi(argv[++i]);
         }
     }
 
@@ -448,9 +458,30 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
 
+    // --category N / --provider M：切换到指定分类与服务商，用于截图不同预设的字段布局。
+    if (pickCategory >= 0 || pickProvider >= 0) {
+        const HWND categoryCombo = GetDlgItem(dialog, 1030);
+        const HWND providerCombo = GetDlgItem(dialog, 1004);
+        if (categoryCombo && providerCombo) {
+            if (pickCategory >= 0) {
+                SendMessageW(categoryCombo, CB_SETCURSEL,
+                    static_cast<WPARAM>(pickCategory), 0);
+                SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(1030, CBN_SELCHANGE),
+                    reinterpret_cast<LPARAM>(categoryCombo));
+                Sleep(300);
+            }
+            if (pickProvider >= 0) {
+                SendMessageW(providerCombo, CB_SETCURSEL,
+                    static_cast<WPARAM>(pickProvider), 0);
+                SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(1004, CBN_SELCHANGE),
+                    reinterpret_cast<LPARAM>(providerCombo));
+                Sleep(300);
+            }
+        }
+    }
+
     HWND target = dialog;
-    if (customDialog) {
-        // 新增站点 → 接口类型切到“自定义接口” → 点“自定义配置…”，
+    if (customDialog) {        // 新增站点 → 接口类型切到“自定义接口” → 点“自定义配置…”，
         // 这样第二层对话框才会出现（按钮只在自定义适配器下启用）。
         //
         // 注意：最后一步必须用 PostMessage。子对话框是模态的，SendMessage
@@ -493,17 +524,20 @@ int wmain(int argc, wchar_t** argv) {
 
     const bool saved = CaptureWindow(target, output);
 
-    // --save-refresh N：选中第 N 个刷新间隔并点“保存并关闭”，验证落盘。
-    if (saveRefreshChoice >= 0 && target == dialog) {
-        const HWND refreshCombo = GetDlgItem(dialog, 1024);
-        if (refreshCombo) {
-            SendMessageW(refreshCombo, CB_SETCURSEL,
-                static_cast<WPARAM>(saveRefreshChoice), 0);
+    // --save-refresh N：按 N 秒填写刷新间隔（数字 + 单位）并点“保存并关闭”，验证落盘。
+    if (saveRefreshSeconds > 0 && target == dialog) {
+        const HWND refreshEdit = GetDlgItem(dialog, 1032);
+        const HWND refreshUnit = GetDlgItem(dialog, 1033);
+        if (refreshEdit && refreshUnit) {
+            const bool useMinutes = saveRefreshSeconds >= 60 && saveRefreshSeconds % 60 == 0;
+            const int value = useMinutes ? saveRefreshSeconds / 60 : saveRefreshSeconds;
+            SetWindowTextW(refreshEdit, std::to_wstring(value).c_str());
+            SendMessageW(refreshUnit, CB_SETCURSEL, useMinutes ? 1 : 0, 0);
             const HWND okButton = GetDlgItem(dialog, IDOK);
             PostMessageW(dialog, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED),
                 reinterpret_cast<LPARAM>(okButton));
             Sleep(800);
-            wprintf(L"[preview] 已保存刷新间隔索引 %d\n", saveRefreshChoice);
+            wprintf(L"[preview] 已保存刷新间隔 %d 秒\n", saveRefreshSeconds);
         }
     } else {
         if (target != dialog) PostMessageW(target, WM_CLOSE, 0, 0);

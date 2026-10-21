@@ -255,7 +255,7 @@ public:
         case TMI_DESCRIPTION: return L"AIAPI/New API/Sub2API 中转站、自定义接口，以及 DeepSeek 等官方余额、Kimi 等 Token Plan、Claude/Codex 官方订阅";
         case TMI_AUTHOR: return L"TrafficMonitor AIAPI quota plugin";
         case TMI_COPYRIGHT: return L"Copyright (C) 2026";
-        case TMI_VERSION: return L"3.0.0";
+        case TMI_VERSION: return L"3.1.0";
         case TMI_URL: return L"{AIAPI 站点}";
         default: return L"";
         }
@@ -427,52 +427,120 @@ private:
         return result;
     }
 
-    // 刷新间隔候选（秒）。界面按索引与这些值一一对应。
-    static constexpr int kRefreshChoices[] = { 15, 30, 60, 120, 300, 600, 900 };
-
-    static std::wstring RefreshChoiceLabel(int seconds) {
-        if (seconds < 60) return std::to_wstring(seconds) + L" 秒";
-        const int minutes = seconds / 60;
-        return std::to_wstring(minutes) + L" 分钟";
+    // 刷新间隔：数字 + 单位（秒/分钟），范围 15 秒 ~ 15 分钟，可手动输入。
+    static void LoadRefreshInterval(HWND window, int seconds) {
+        seconds = ClampRefreshSeconds(seconds);
+        const bool useMinutes = seconds >= 60 && seconds % 60 == 0;
+        SetDlgItemInt(window, IDC_REFRESH_EDIT, useMinutes ? seconds / 60 : seconds, FALSE);
+        SendDlgItemMessageW(window, IDC_REFRESH_UNIT, CB_SETCURSEL, useMinutes ? 1 : 0, 0);
     }
 
-    // 把当前间隔映射到最接近的候选索引（配置文件被手工改过时也不会选空）。
-    static int RefreshChoiceIndex(int seconds) {
-        const int clamped = ClampRefreshSeconds(seconds);
-        size_t best = 0;
-        int bestDelta = INT_MAX;
-        for (size_t i = 0; i < std::size(kRefreshChoices); ++i) {
-            const int delta = std::abs(kRefreshChoices[i] - clamped);
-            if (delta < bestDelta) { bestDelta = delta; best = i; }
+    static bool ReadRefreshInterval(HWND window, int& seconds, std::wstring& error) {
+        BOOL translated = FALSE;
+        const UINT value = GetDlgItemInt(window, IDC_REFRESH_EDIT, &translated, FALSE);
+        const int unit = static_cast<int>(
+            SendDlgItemMessageW(window, IDC_REFRESH_UNIT, CB_GETCURSEL, 0, 0));
+        if (!translated || value == 0) {
+            error = L"刷新间隔需要填写大于 0 的数字。";
+            return false;
         }
-        return static_cast<int>(best);
-    }
-
-    static void SelectRefreshChoice(HWND window, int seconds) {
-        SendDlgItemMessageW(window, IDC_REFRESH_INTERVAL, CB_SETCURSEL,
-            static_cast<WPARAM>(RefreshChoiceIndex(seconds)), 0);
-    }
-
-    static int RefreshChoiceSeconds(HWND window) {
-        const int index = static_cast<int>(
-            SendDlgItemMessageW(window, IDC_REFRESH_INTERVAL, CB_GETCURSEL, 0, 0));
-        if (index < 0 || index >= static_cast<int>(std::size(kRefreshChoices))) {
-            return kDefaultRefreshSeconds;
+        const int requested = unit == 1 ? static_cast<int>(value) * 60 : static_cast<int>(value);
+        const int clamped = ClampRefreshSeconds(requested);
+        if (clamped != requested) {
+            error = L"刷新间隔需在 15 秒到 15 分钟之间。";
+            return false;
         }
-        return kRefreshChoices[index];
+        seconds = requested;
+        return true;
     }
 
-    static int AdapterComboIndex(aiapi::SiteAdapter adapter) {
-        for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
-            const auto* preset = aiapi::ProviderPresetAt(i);
-            if (preset && preset->provider == adapter) return static_cast<int>(i);
+    static int ProviderCategoryIndex(aiapi::ProviderCategory category) {
+        switch (category) {
+        case aiapi::ProviderCategory::Relay: return 0;
+        case aiapi::ProviderCategory::OfficialBalance: return 1;
+        case aiapi::ProviderCategory::OfficialPlan: return 2;
+        case aiapi::ProviderCategory::OfficialSubscription: return 3;
         }
         return 0;
     }
 
-    static aiapi::SiteAdapter AdapterFromCombo(int index) {
-        const auto* preset = index >= 0 ? aiapi::ProviderPresetAt(static_cast<size_t>(index)) : nullptr;
-        return preset ? preset->provider : aiapi::SiteAdapter::AIAPI;
+    static aiapi::ProviderCategory ProviderCategoryFromIndex(int index) {
+        switch (index) {
+        case 1: return aiapi::ProviderCategory::OfficialBalance;
+        case 2: return aiapi::ProviderCategory::OfficialPlan;
+        case 3: return aiapi::ProviderCategory::OfficialSubscription;
+        default: return aiapi::ProviderCategory::Relay;
+        }
+    }
+
+    static const wchar_t* ProviderCategoryName(int index) {
+        switch (index) {
+        case 1: return L"官方余额";
+        case 2: return L"Token Plan";
+        case 3: return L"官方订阅";
+        default: return L"中转站与自定义";
+        }
+    }
+
+    // 服务商下拉只显示当前分类的预设；selected 不在该分类时选中第一项。
+    static void PopulateProviderCombo(HWND window, aiapi::ProviderCategory category,
+        aiapi::SiteProvider selected) {
+        SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_RESETCONTENT, 0, 0);
+        int position = 0;
+        int selectIndex = 0;
+        for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
+            const auto* preset = aiapi::ProviderPresetAt(i);
+            if (!preset || preset->category != category) continue;
+            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(preset->displayName));
+            if (preset->provider == selected) selectIndex = position;
+            ++position;
+        }
+        SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL,
+            static_cast<WPARAM>(selectIndex), 0);
+    }
+
+    static aiapi::SiteProvider SelectedProvider(HWND window) {
+        const int categoryIndex = static_cast<int>(
+            SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_GETCURSEL, 0, 0));
+        const aiapi::ProviderCategory category = ProviderCategoryFromIndex(categoryIndex);
+        const int providerIndex = static_cast<int>(
+            SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_GETCURSEL, 0, 0));
+        int position = 0;
+        for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
+            const auto* preset = aiapi::ProviderPresetAt(i);
+            if (!preset || preset->category != category) continue;
+            if (position == providerIndex) return preset->provider;
+            ++position;
+        }
+        return aiapi::SiteProvider::AIAPI;
+    }
+
+    // 切换服务商后清空与旧服务商绑定的字段（凭据/User ID），并套用新预设的默认地址。
+    static void ApplyProviderFields(HWND window, DialogContext* context,
+        aiapi::SiteProvider previousProvider) {
+        if (context->selectedIndex < 0 ||
+            context->selectedIndex >= static_cast<int>(context->sites.size())) return;
+        auto& site = context->sites[static_cast<size_t>(context->selectedIndex)];
+        if (previousProvider == site.adapter) return;
+        if (!site.credential.empty()) {
+            SecureZeroMemory(site.credential.data(), site.credential.size() * sizeof(wchar_t));
+        }
+        site.credential.clear();
+        site.userId.clear();
+        const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
+        if (preset) {
+            switch (preset->baseUrlMode) {
+            case aiapi::FieldMode::Fixed:
+            case aiapi::FieldMode::Editable:
+                site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
+                break;
+            case aiapi::FieldMode::Hidden:
+                site.baseUrl.clear();
+                break;
+            }
+        }
+        UpdateSiteList(window, context);
     }
 
     // 对话框居中：优先对齐可见的父窗口，否则退回屏幕工作区（宿主主窗口可能隐藏）。
@@ -495,7 +563,7 @@ private:
     }
 
     static void SetDetailEnabled(HWND window, bool enabled) {
-        for (int id : { IDC_SITE_ENABLED, IDC_SITE_TYPE, IDC_CUSTOM_CONFIG, IDC_SITE_NAME,
+        for (int id : { IDC_SITE_ENABLED, IDC_SITE_CATEGORY, IDC_SITE_TYPE, IDC_CUSTOM_CONFIG, IDC_SITE_NAME,
                         IDC_SITE_BASE_URL, IDC_SITE_BASE_URL_LABEL, IDC_SITE_CREDENTIAL,
                         IDC_SITE_CREDENTIAL_LABEL, IDC_SITE_USER_ID, IDC_SITE_USER_ID_LABEL }) {
             EnableWindow(GetDlgItem(window, id), enabled ? TRUE : FALSE);
@@ -530,8 +598,8 @@ private:
         RECT client{};
         GetClientRect(list, &client);
         const int total = client.right - client.left;
-        const int nameWidth = total * 50 / 100;
-        const int typeWidth = total * 28 / 100;
+        const int nameWidth = total * 44 / 100;
+        const int typeWidth = total * 34 / 100;
         const int statusWidth = std::max(28, total - nameWidth - typeWidth - 8);
         InsertListViewColumn(list, 0, L"名称", nameWidth);
         InsertListViewColumn(list, 1, L"类型", typeWidth);
@@ -568,6 +636,11 @@ private:
         EnableWindow(GetDlgItem(window, IDC_SITE_USER_ID_LABEL), newApi ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_CUSTOM_CONFIG), custom ? TRUE : FALSE);
         EnableWindow(GetDlgItem(window, IDC_SITE_CREDENTIAL), needsCredential || custom ? TRUE : FALSE);
+        // 用不到的输入框直接隐藏，避免出现一排灰色空框；标签保留作为说明。
+        ShowWindow(GetDlgItem(window, IDC_SITE_USER_ID), newApi ? SW_SHOW : SW_HIDE);
+        ShowWindow(GetDlgItem(window, IDC_SITE_USER_ID_LABEL), newApi ? SW_SHOW : SW_HIDE);
+        ShowWindow(GetDlgItem(window, IDC_SITE_CREDENTIAL),
+            (needsCredential || custom) ? SW_SHOW : SW_HIDE);
 
         // 固定/隐藏地址的显示值统一由预设决定，避免旧配置里的残留值误导。
         if (preset->baseUrlMode == aiapi::FieldMode::Fixed && preset->defaultBaseUrl) {
@@ -615,41 +688,41 @@ private:
         switch (preset->category) {
         case aiapi::ProviderCategory::OfficialBalance:
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? (L"已保存 API Key。后台查询" + providerName + L"的官方账户余额。").c_str()
-                : (L"填写" + providerName + L"的 API Key 后开始查询官方账户余额。").c_str());
+                ? (L"已保存 API Key，后台查询" + providerName + L"官方余额。").c_str()
+                : (L"填写" + providerName + L"的 API Key 后查询官方余额。").c_str());
             break;
         case aiapi::ProviderCategory::OfficialPlan:
             SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                ? (L"已保存 API Key。后台查询" + providerName + L"套餐的剩余额度（多个时间窗口）。").c_str()
-                : (L"填写" + providerName + L"的 API Key 后查询编程套餐额度。").c_str());
+                ? (L"已保存 API Key，后台查询" + providerName + L"套餐额度。").c_str()
+                : (L"填写" + providerName + L"的 API Key 后查询套餐额度。").c_str());
             break;
         case aiapi::ProviderCategory::OfficialSubscription:
             SetDlgItemTextW(window, IDC_STATUS,
                 (L"使用本机 " + std::wstring(preset->subscriptionCli ? preset->subscriptionCli : L"CLI") +
-                    L" 已登录的 OAuth 凭据，无需填写 API Key；在对应 CLI 登录后自动生效。").c_str());
+                    L" 的登录凭据，无需填写 Key。").c_str());
             break;
         case aiapi::ProviderCategory::Relay:
         default:
             switch (adapter) {
             case aiapi::SiteAdapter::AIAPI:
                 SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                    ? L"已保存 AIAPI 凭据。后台按 /v1/usage 查询剩余额度，自动识别钱包余额、套餐或限额类别。"
-                    : L"填写 AIAPI API Key（或本机签发的站点会话凭据）后，插件才会开始查询余额。");
+                    ? L"已保存 AIAPI 凭据，后台按 /v1/usage 查询余额。"
+                    : L"填写 AIAPI API Key（或站点会话凭据）后开始查询余额。");
                 break;
             case aiapi::SiteAdapter::NewAPI:
                 SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                    ? L"已保存 System Access Token。User ID 必须是数字；额度按 CC-Switch 模板的 500000 单位换算。"
-                    : L"填写 New API Base URL、System Access Token 和数字 User ID，按用户账户 quota 查询。");
+                    ? L"已保存 System Access Token，按用户 quota 查询余额。"
+                    : L"填写 Base URL、System Access Token 和数字 User ID。");
                 break;
             case aiapi::SiteAdapter::Sub2API:
                 SetDlgItemTextW(window, IDC_STATUS, hasCredential
-                    ? L"已保存 Sub2API API Key。请求为 GET <Base URL>/v1/usage；凭据留空表示保留已保存的值。"
-                    : L"填写 Sub2API 站点根 URL 和 API Key；Base URL 可带或不带 /v1，无需 User ID。");
+                    ? L"已保存 Sub2API API Key，请求 GET <Base URL>/v1/usage。"
+                    : L"填写站点根 URL 和 API Key（可带 /v1），无需 User ID。");
                 break;
             case aiapi::SiteAdapter::Custom:
                 SetDlgItemTextW(window, IDC_STATUS, hasCustomScript
-                    ? L"已配置自定义 request / extractor。点击“自定义配置…”可以继续修改。"
-                    : L"选择“自定义接口”后，点击右侧“自定义配置…”编写 request 和 extractor。");
+                    ? L"已配置 request / extractor，可点“自定义配置…”继续修改。"
+                    : L"点右侧“自定义配置…”编写 request 和 extractor。");
                 break;
             default:
                 break;
@@ -673,6 +746,7 @@ private:
             SetDlgItemTextW(window, IDC_SITE_CREDENTIAL, L"");
             SetDlgItemTextW(window, IDC_SITE_USER_ID, L"");
             SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, BST_UNCHECKED, 0);
+            SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
             SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
             SetEditCue(window, IDC_SITE_NAME, L"例如：AIAPI 主账号");
             SetEditCue(window, IDC_SITE_BASE_URL, L"https://");
@@ -698,7 +772,10 @@ private:
             preset && !preset->needsCredential ? L"" :
             (site.credential.empty() ? L"粘贴 API Key / Token" : L"已保存，留空表示不修改"));
         SetEditCue(window, IDC_SITE_USER_ID, L"数字 User ID");
-        SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_SETCURSEL, AdapterComboIndex(site.adapter), 0);
+        const aiapi::ProviderCategory category = preset ? preset->category : aiapi::ProviderCategory::Relay;
+        SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_SETCURSEL,
+            static_cast<WPARAM>(ProviderCategoryIndex(category)), 0);
+        PopulateProviderCombo(window, category, site.adapter);
         SendDlgItemMessageW(window, IDC_SITE_ENABLED, BM_SETCHECK, site.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
         UpdateAdapterFields(window, site.adapter, !site.credential.empty(), !site.customScript.empty());
     }
@@ -756,7 +833,7 @@ private:
         site.name = std::move(name);
         site.baseUrl = std::move(baseUrl);
         site.userId = std::move(userId);
-        site.adapter = AdapterFromCombo(static_cast<int>(SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_GETCURSEL, 0, 0)));
+        site.adapter = SelectedProvider(window);
         const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(site.adapter);
         if (preset) {
             switch (preset->baseUrlMode) {
@@ -1075,11 +1152,9 @@ private:
             InitCommonControlsEx(&commonControls);
             CenterDialog(window);
 
-            for (size_t i = 0; i < aiapi::ProviderPresetCount(); ++i) {
-                const auto* preset = aiapi::ProviderPresetAt(i);
-                if (!preset || !preset->displayName) continue;
-                SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_ADDSTRING, 0,
-                    reinterpret_cast<LPARAM>(preset->displayName));
+            for (int i = 0; i < 4; ++i) {
+                SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(ProviderCategoryName(i)));
             }
             SendDlgItemMessageW(window, IDC_SITE_NAME, EM_LIMITTEXT,
                 static_cast<WPARAM>(kMaxSiteNameChars), 0);
@@ -1088,13 +1163,13 @@ private:
             SendDlgItemMessageW(window, IDC_SITE_CREDENTIAL, EM_LIMITTEXT,
                 static_cast<WPARAM>(kMaxCredentialChars), 0);
             SendDlgItemMessageW(window, IDC_SITE_USER_ID, EM_LIMITTEXT, 32, 0);
-            // 刷新间隔选项：秒数与显示文案一一对应，保存时按索引换算。
-            for (int seconds : kRefreshChoices) {
-                const std::wstring label = RefreshChoiceLabel(seconds);
-                SendDlgItemMessageW(window, IDC_REFRESH_INTERVAL, CB_ADDSTRING, 0,
-                    reinterpret_cast<LPARAM>(label.c_str()));
-            }
-            SelectRefreshChoice(window, context->refreshSeconds);
+            // 刷新间隔：数字 + 单位，允许手动输入任意 15 秒 ~ 15 分钟的值。
+            SendDlgItemMessageW(window, IDC_REFRESH_UNIT, CB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(L"秒"));
+            SendDlgItemMessageW(window, IDC_REFRESH_UNIT, CB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(L"分钟"));
+            SendDlgItemMessageW(window, IDC_REFRESH_EDIT, EM_LIMITTEXT, 4, 0);
+            LoadRefreshInterval(window, context->refreshSeconds);
             InitSiteListView(window);
             UpdateSiteList(window, context);
             return TRUE;
@@ -1131,38 +1206,32 @@ private:
         if (message != WM_COMMAND || !context) return FALSE;
 
         switch (LOWORD(wParam)) {
+        case IDC_SITE_CATEGORY:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                const int categoryIndex = static_cast<int>(
+                    SendDlgItemMessageW(window, IDC_SITE_CATEGORY, CB_GETCURSEL, 0, 0));
+                const aiapi::ProviderCategory category = ProviderCategoryFromIndex(categoryIndex);
+                if (context->selectedIndex >= 0 &&
+                    context->selectedIndex < static_cast<int>(context->sites.size())) {
+                    const aiapi::SiteProvider previousProvider =
+                        context->sites[static_cast<size_t>(context->selectedIndex)].adapter;
+                    if (!StoreSelectedSite(window, context)) return TRUE;
+                    PopulateProviderCombo(window, category, static_cast<aiapi::SiteProvider>(0));
+                    context->sites[static_cast<size_t>(context->selectedIndex)].adapter =
+                        SelectedProvider(window);
+                    ApplyProviderFields(window, context, previousProvider);
+                } else {
+                    PopulateProviderCombo(window, category, static_cast<aiapi::SiteProvider>(0));
+                }
+            }
+            return TRUE;
         case IDC_SITE_TYPE:
             if (HIWORD(wParam) == CBN_SELCHANGE &&
                 context->selectedIndex >= 0 && context->selectedIndex < static_cast<int>(context->sites.size())) {
-                const size_t index = static_cast<size_t>(context->selectedIndex);
-                const aiapi::SiteAdapter previousAdapter = context->sites[index].adapter;
-                const aiapi::SiteAdapter selectedAdapter = AdapterFromCombo(
-                    static_cast<int>(SendDlgItemMessageW(window, IDC_SITE_TYPE, CB_GETCURSEL, 0, 0)));
-                StoreSelectedSite(window, context);
-                auto& site = context->sites[index];
-                site.adapter = selectedAdapter;
-                if (previousAdapter != selectedAdapter) {
-                    if (!site.credential.empty()) {
-                        SecureZeroMemory(site.credential.data(), site.credential.size() * sizeof(wchar_t));
-                    }
-                    site.credential.clear();
-                    site.userId.clear();
-                    const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(selectedAdapter);
-                    if (preset) {
-                        switch (preset->baseUrlMode) {
-                        case aiapi::FieldMode::Fixed:
-                            site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
-                            break;
-                        case aiapi::FieldMode::Hidden:
-                            site.baseUrl.clear();
-                            break;
-                        case aiapi::FieldMode::Editable:
-                            site.baseUrl = preset->defaultBaseUrl ? preset->defaultBaseUrl : L"";
-                            break;
-                        }
-                    }
-                }
-                UpdateSiteList(window, context);
+                const aiapi::SiteProvider previousProvider =
+                    context->sites[static_cast<size_t>(context->selectedIndex)].adapter;
+                if (!StoreSelectedSite(window, context)) return TRUE;
+                ApplyProviderFields(window, context, previousProvider);
             }
             return TRUE;
         case IDC_SITE_ADD:
@@ -1202,7 +1271,7 @@ private:
             if (!StoreSelectedSite(window, context)) return TRUE;
             if (context->selectedIndex < 0 || context->selectedIndex >= static_cast<int>(context->sites.size()) ||
                 context->sites[static_cast<size_t>(context->selectedIndex)].adapter != aiapi::SiteAdapter::Custom) {
-                MessageBoxW(window, L"请先将接口类型选为“自定义接口”。", L"自定义接口", MB_OK | MB_ICONINFORMATION);
+                MessageBoxW(window, L"请先将“服务商”选为“自定义接口”。", L"自定义接口", MB_OK | MB_ICONINFORMATION);
                 return TRUE;
             }
             {
@@ -1214,6 +1283,33 @@ private:
                 }
             }
             return TRUE;
+        case IDC_REFRESH_NOW: {
+            // 先保存当前编辑内容（含刷新间隔）再立刻唤醒后台线程，便于改完 Key 后马上验证。
+            if (!StoreSelectedSite(window, context)) {
+                MessageBoxW(window, L"站点字段过长，未保存。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+            std::wstring validationError;
+            if (!ValidateProfiles(context->sites, &validationError)) {
+                MessageBoxW(window, validationError.c_str(), L"站点配置未保存", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            int refreshSeconds = kDefaultRefreshSeconds;
+            std::wstring refreshError;
+            if (!ReadRefreshInterval(window, refreshSeconds, refreshError)) {
+                MessageBoxW(window, refreshError.c_str(), L"刷新间隔无效", MB_OK | MB_ICONINFORMATION);
+                SetFocus(GetDlgItem(window, IDC_REFRESH_EDIT));
+                return TRUE;
+            }
+            if (!context->plugin->SetConfig(context->sites, refreshSeconds)) {
+                MessageBoxW(window, L"无法加密并保存站点配置。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+            context->changed = true;
+            context->plugin->RequestRefresh();
+            SetDlgItemTextW(window, IDC_STATUS, L"配置已保存并请求立即刷新；关闭对话框后即可看到最新余额。");
+            return TRUE;
+        }
         case IDOK: {
             if (!StoreSelectedSite(window, context)) {
                 MessageBoxW(window, L"站点字段过长，未保存。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
@@ -1224,7 +1320,13 @@ private:
                 MessageBoxW(window, validationError.c_str(), L"站点配置未保存", MB_OK | MB_ICONINFORMATION);
                 return TRUE;
             }
-            const int refreshSeconds = RefreshChoiceSeconds(window);
+            int refreshSeconds = kDefaultRefreshSeconds;
+            std::wstring refreshError;
+            if (!ReadRefreshInterval(window, refreshSeconds, refreshError)) {
+                MessageBoxW(window, refreshError.c_str(), L"刷新间隔无效", MB_OK | MB_ICONINFORMATION);
+                SetFocus(GetDlgItem(window, IDC_REFRESH_EDIT));
+                return TRUE;
+            }
             if (!context->plugin->SetConfig(context->sites, refreshSeconds)) {
                 MessageBoxW(window, L"无法加密并保存站点配置。", L"多站点 AI 余额", MB_OK | MB_ICONERROR);
                 return TRUE;
@@ -1280,25 +1382,12 @@ private:
                 value.id = profile->id;
                 value.adapter = profile->adapter;
                 const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(profile->adapter);
-                if (preset) {
-                    switch (preset->category) {
-                    case aiapi::ProviderCategory::OfficialBalance:
-                        value.accountBalance = true;
-                        value.label = L"余额";
-                        break;
-                    case aiapi::ProviderCategory::OfficialPlan:
-                    case aiapi::ProviderCategory::OfficialSubscription:
-                        value.label = L"套餐";
-                        break;
-                    default:
-                        value.accountBalance = profile->adapter == aiapi::SiteAdapter::AIAPI ||
-                            profile->adapter == aiapi::SiteAdapter::NewAPI;
-                        break;
-                    }
-                }
-                const std::wstring category = !value.label.empty() ? value.label
-                    : (value.accountBalance ? L"余额" : L"可用额");
-                value.itemName = profile->name + L" " + category;
+                const bool packageProvider = preset &&
+                    (preset->category == aiapi::ProviderCategory::OfficialPlan ||
+                        preset->category == aiapi::ProviderCategory::OfficialSubscription);
+                value.label = packageProvider ? L"套餐" : L"余额";
+                value.accountBalance = !packageProvider;
+                value.itemName = profile->name + L" " + value.label;
                 value.itemId = MakeItemId(profile->id);
                 snapshot->sites.push_back(std::move(value));
             }
@@ -1320,8 +1409,7 @@ private:
         Publish(std::move(snapshot));
     }
 
-    void PublishBalances(const std::vector<aiapi::SiteBalance>& results) {
-        auto previous = GetSnapshot();
+    void PublishBalances(const std::vector<aiapi::SiteBalance>& results) {        auto previous = GetSnapshot();
         auto snapshot = std::make_shared<Snapshot>();
         std::wstring tip;
         bool anySuccess = false;
@@ -1333,11 +1421,15 @@ private:
             value.adapter = result.adapter;
             value.accountBalance = result.accountBalance;
             value.packageSummary = result.packageSummary;
-            value.label = result.scopeLabel;
-            value.extra = result.extra;
             const bool isPackage = !result.packageSummary.empty();
-            const std::wstring category = !result.scopeLabel.empty() ? result.scopeLabel
-                : (isPackage ? L"套餐" : (result.accountBalance ? L"余额" : L"可用额"));
+            const aiapi::ProviderPreset* preset = aiapi::FindProviderPreset(result.adapter);
+            const bool packageProvider = preset &&
+                (preset->category == aiapi::ProviderCategory::OfficialPlan ||
+                    preset->category == aiapi::ProviderCategory::OfficialSubscription);
+            // 显示格式统一：余额模式恒为「名称（余额）：金额」，套餐模式恒为
+            // 「名称（套餐）：5H x% 7D x% 1M x%」，不再区分可用额/日限额等说法。
+            const std::wstring category = (isPackage || packageProvider) ? L"套餐" : L"余额";
+            value.label = category;
             value.itemName = result.name + L" " + category;
             value.itemId = MakeItemId(result.id);
             value.error = result.error;
@@ -1353,8 +1445,17 @@ private:
                 value.success = true;
                 if (!result.packageSummary.empty()) {
                     // 套餐类（Token Plan / 官方订阅）没有金额语义，显示百分比摘要。
-                    value.value = result.packageSummary;
-                    value.fullValue = result.packageSummary;
+                    // 统一成单空格分隔，避免不同服务商模板里的多空格造成排版差异。
+                    std::wstring summary = result.packageSummary;
+                    std::wstring collapsed;
+                    collapsed.reserve(summary.size());
+                    for (wchar_t ch : summary) {
+                        if (ch == L' ' && !collapsed.empty() && collapsed.back() == L' ') continue;
+                        collapsed.push_back(ch);
+                    }
+                    while (!collapsed.empty() && collapsed.back() == L' ') collapsed.pop_back();
+                    value.value = collapsed;
+                    value.fullValue = collapsed;
                 } else {
                     value.value = FormatCompactMoney(result.remaining, result.unit);
                     value.fullValue = FormatMoney(result.remaining, result.unit);
@@ -1386,33 +1487,24 @@ private:
             }
             if (!result.success && !result.skipped) anyFailure = true;
 
+            // tooltip 每行固定为「名称（余额/套餐）：值」，失败行也使用同一模式。
+            const std::wstring failCategory = packageProvider ? L"套餐" : L"余额";
             if (!tip.empty()) tip += L"\r\n";
-            tip += result.name + L"（";
             if (result.skipped) {
                 // 退避中的站点：不显示错误，只说明数值是上次结果。
                 if (oldValue && oldValue->success) {
-                    const bool oldPackage = !oldValue->packageSummary.empty();
-                    const std::wstring oldCategory = !oldValue->label.empty() ? oldValue->label
-                        : (oldPackage ? L"套餐" : (oldValue->accountBalance ? L"余额" : L"可用额"));
-                    tip += oldCategory;
-                    tip += L"）：" + (oldPackage ? oldValue->packageSummary : oldValue->fullValue);
-                    tip += L"（稍后刷新）";
+                    const std::wstring oldCategory =
+                        oldValue->packageSummary.empty() ? L"余额" : L"套餐";
+                    tip += result.name + L"（" + oldCategory + L"）：" +
+                        oldValue->fullValue + L"（稍后刷新）";
                 } else {
-                    tip += L"等待重试）：" + (result.error.empty() ? L"暂时跳过本轮查询" : result.error);
+                    tip += result.name + L"（" + failCategory + L"）：等待重试";
                 }
             } else if (result.success) {
-                if (!result.packageSummary.empty()) {
-                    tip += L"套餐）：" + result.packageSummary;
-                    if (result.packageSummary.find(L'%') == std::wstring::npos)
-                        tip += L" 剩余 " + value.fullValue;
-                } else {
-                    tip += category + L"）：";
-                    if (result.accountBalance && result.scopeLabel.empty()) tip += L"可用余额 ";
-                    tip += value.fullValue;
-                }
-                if (!result.extra.empty()) tip += L"；" + result.extra;
+                tip += result.name + L"（" + category + L"）：" + value.fullValue;
             } else {
-                tip += L"查询失败）：" + (result.error.empty() ? L"未获取到余额" : result.error);
+                tip += result.name + L"（" + failCategory + L"）：查询失败" +
+                    (result.error.empty() ? L"" : L"：" + result.error);
                 if (oldValue && oldValue->success) tip += L"（上次 " + oldValue->fullValue + L"）";
             }
             snapshot->sites.push_back(std::move(value));
@@ -1857,9 +1949,7 @@ const wchar_t* PluginItem::GetItemLableText() const {
     held = owner_->GetSnapshot();
     if (!held || itemIndex_ < 0 || itemIndex_ >= static_cast<int>(held->sites.size())) return L"余额";
     const auto& site = held->sites[static_cast<size_t>(itemIndex_)];
-    if (!site.label.empty()) return site.label.c_str();
-    if (!site.packageSummary.empty()) return L"套餐";
-    return site.accountBalance ? L"余额" : L"可用额";
+    return site.packageSummary.empty() ? L"余额" : L"套餐";
 }
 
 const wchar_t* PluginItem::GetItemValueText() const {

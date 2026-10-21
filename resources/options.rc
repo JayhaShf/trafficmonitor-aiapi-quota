@@ -9,59 +9,66 @@
 // 布局：左右两栏（站点列表 / 选中站点的接口与凭据），底部一行全局刷新间隔，
 // 右下角主/次按钮。
 
-IDD_OPTIONS DIALOGEX 0, 0, 400, 258
+IDD_OPTIONS DIALOGEX 0, 0, 400, 276
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "多站点 AI 余额设置"
 FONT 9, "微软雅黑", 400, 0, 0x0
 BEGIN
     // ── 左栏：站点列表 ──────────────────────────────────────────────
-    GROUPBOX        "站点", IDC_GROUP_SITES, 7, 7, 146, 200
+    GROUPBOX        "站点", IDC_GROUP_SITES, 7, 7, 146, 224
 
     CONTROL         "", IDC_SITE_LIST, "SysListView32",
                     LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
-                    14, 20, 132, 142
+                    14, 20, 132, 166
 
     CONTROL         "启用查询", IDC_SITE_ENABLED, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 168, 132, 10
-    PUSHBUTTON      "新增站点", IDC_SITE_ADD, 14, 184, 62, 14
-    PUSHBUTTON      "删除站点", IDC_SITE_REMOVE, 82, 184, 60, 14
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 192, 132, 10
+    PUSHBUTTON      "新增站点", IDC_SITE_ADD, 14, 208, 62, 14
+    PUSHBUTTON      "删除站点", IDC_SITE_REMOVE, 82, 208, 60, 14
 
-    // ── 右栏：选中站点的详情 ────────────────────────────────────────
-    GROUPBOX        "接口与凭据", IDC_GROUP_DETAILS, 160, 7, 233, 200
+    // ── 右栏：选中站点的分类 / 服务商 / 凭据 ────────────────────────
+    GROUPBOX        "接口与凭据", IDC_GROUP_DETAILS, 160, 7, 233, 224
 
-    LTEXT           "接口类型", IDC_LABEL_TYPE, 167, 18, 60, 8
-    COMBOBOX        IDC_SITE_TYPE, 167, 29, 146, 80,
+    LTEXT           "分类", IDC_LABEL_CATEGORY, 167, 18, 40, 8
+    COMBOBOX        IDC_SITE_CATEGORY, 167, 29, 146, 80,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "自定义配置…", IDC_CUSTOM_CONFIG, 316, 28, 68, 14
 
-    LTEXT           "显示名称", IDC_LABEL_NAME, 167, 49, 80, 8
-    EDITTEXT        IDC_SITE_NAME, 167, 60, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "服务商", IDC_LABEL_TYPE, 167, 49, 60, 8
+    COMBOBOX        IDC_SITE_TYPE, 167, 60, 146, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "自定义配置…", IDC_CUSTOM_CONFIG, 316, 59, 68, 14
 
-    LTEXT           "站点地址", IDC_SITE_BASE_URL_LABEL, 167, 80, 120, 8
-    EDITTEXT        IDC_SITE_BASE_URL, 167, 91, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "显示名称", IDC_LABEL_NAME, 167, 80, 80, 8
+    EDITTEXT        IDC_SITE_NAME, 167, 91, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "凭据", IDC_SITE_CREDENTIAL_LABEL, 167, 111, 220, 8
-    EDITTEXT        IDC_SITE_CREDENTIAL, 167, 122, 213, 12,
+    LTEXT           "站点地址", IDC_SITE_BASE_URL_LABEL, 167, 111, 120, 8
+    EDITTEXT        IDC_SITE_BASE_URL, 167, 122, 213, 12, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "凭据", IDC_SITE_CREDENTIAL_LABEL, 167, 142, 220, 8
+    EDITTEXT        IDC_SITE_CREDENTIAL, 167, 153, 213, 12,
                     ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "New API User ID", IDC_SITE_USER_ID_LABEL, 167, 142, 140, 8
-    EDITTEXT        IDC_SITE_USER_ID, 167, 153, 100, 12,
+    LTEXT           "New API User ID", IDC_SITE_USER_ID_LABEL, 167, 173, 140, 8
+    EDITTEXT        IDC_SITE_USER_ID, 167, 184, 100, 12,
                     ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 
-    LTEXT           "点击“新增站点”添加 AIAPI、New API、Sub2API 或自定义接口。",
-                    IDC_STATUS, 167, 172, 213, 24, SS_NOPREFIX
+    LTEXT           "点击“新增站点”添加站点。",
+                    IDC_STATUS, 167, 203, 213, 21, SS_NOPREFIX
 
-    // ── 底部：全局刷新间隔 + 页脚 ───────────────────────────────────
-    LTEXT           "刷新间隔", IDC_LABEL_REFRESH, 7, 217, 40, 8
-    COMBOBOX        IDC_REFRESH_INTERVAL, 49, 214, 84, 80,
+    // ── 底部：刷新间隔（可手动输入）+ 页脚 ──────────────────────────
+    LTEXT           "刷新间隔", IDC_LABEL_REFRESH, 7, 240, 40, 8
+    EDITTEXT        IDC_REFRESH_EDIT, 49, 237, 26, 12,
+                    ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    COMBOBOX        IDC_REFRESH_UNIT, 79, 235, 44, 60,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "所有启用站点按此间隔刷新；失败时自动延长重试间隔。",
-                    IDC_REFRESH_HINT, 140, 217, 250, 8, SS_NOPREFIX
+    LTEXT           "所有启用站点按此间隔刷新，失败时自动退避。",
+                    IDC_REFRESH_HINT, 128, 240, 250, 8, SS_NOPREFIX
 
-    LTEXT           "配置使用当前用户的 DPAPI 加密保存在 sites.bin。",
-                    IDC_HINT, 7, 241, 250, 8, SS_NOPREFIX
-    DEFPUSHBUTTON   "保存并关闭", IDOK, 262, 238, 68, 14
-    PUSHBUTTON      "取消", IDCANCEL, 334, 238, 59, 14
+    LTEXT           "配置使用 DPAPI 加密保存在 sites.bin。",
+                    IDC_HINT, 7, 258, 185, 8, SS_NOPREFIX
+    PUSHBUTTON      "立即刷新", IDC_REFRESH_NOW, 196, 255, 62, 14
+    DEFPUSHBUTTON   "保存并关闭", IDOK, 262, 255, 68, 14
+    PUSHBUTTON      "取消", IDCANCEL, 334, 255, 59, 14
 END
 
 IDD_CUSTOM_CONFIG DIALOGEX 0, 0, 396, 283
